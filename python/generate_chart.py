@@ -8,16 +8,10 @@ def generate_chart(analysis_data, metadata):
     
     lines = []
     
-    # [Song] header
+    # [Song] header - only fields Clone Hero actually parses
     lines.append("[Song]")
     lines.append("{")
     lines.append(f'  Name = "{metadata.get("name", "Unknown")}"')
-    lines.append(f'  Artist = "{metadata.get("artist", "Unknown")}"')
-    lines.append(f'  Album = "{metadata.get("album", "")}"')
-    
-    song_length = analysis_data.get("duration_ms", 0)
-    lines.append(f'  SongLength = {song_length}')
-    
     lines.append('  Offset = 0')
     lines.append('  Resolution = 480')
     lines.append('  Player2 = bass')
@@ -81,7 +75,10 @@ def generate_chart(analysis_data, metadata):
             lines.append(f"  {tick} = N {fret} {length}")
         lines.append("}")
     
-    return "\n".join(lines)
+    chart_text = "\n".join(lines)
+    # Clone Hero requires UTF-8 BOM + CRLF line endings
+    chart_text = "\ufeff" + chart_text.replace("\n", "\r\n")
+    return chart_text
 
 
 if __name__ == "__main__":

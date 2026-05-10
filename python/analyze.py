@@ -2,7 +2,7 @@
 """AI-powered audio analysis for Clone Hero chart generation.
 Uses librosa for beat/onset detection + Gemini for intelligent note mapping."""
 
-import sys, json, warnings, os, math
+import sys, json, warnings, os, math, re
 import numpy as np
 warnings.filterwarnings("ignore")
 
@@ -360,39 +360,60 @@ JSON only, no markdown."""
 
     req_data = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512}
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}
     }).encode()
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+    # Try primary model, fall back to backup
+    models = [
+        "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-flash-lite",
+    ]
     
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, data=req_data, 
-                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                result = json.loads(resp.read())
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(url, data=req_data, 
+                                              headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    result = json.loads(resp.read())
                 text = result["candidates"][0]["content"]["parts"][0]["text"]
+                
+                # Strip markdown fences
                 text = text.strip()
                 if text.startswith("```"):
-                    text = text.split("\n", 1)[1]
-                    if text.endswith("```"):
-                        text = text[:-3]
-                return json.loads(text)
-        except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < 2:
-                wait = (attempt + 1) * 5
-                print(f"  Gemini rate limited, retrying in {wait}s...", file=sys.stderr)
-                time.sleep(wait)
-            else:
-                print(f"  Gemini API error: {e}", file=sys.stderr)
-                return None
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2)
-            else:
-                print(f"  Gemini API error: {e}", file=sys.stderr)
-                return None
+                    first_nl = text.find('\n')
+                    text = text[first_nl+1:] if first_nl > 0 else text[3:]
+                if text.rstrip().endswith("```"):
+                    text = text.rstrip()[:-3].strip()
+                
+                # Extract JSON object
+                start_brace = text.find('{')
+                end_brace = text.rfind('}')
+                if start_brace >= 0 and end_brace > start_brace:
+                    text = text[start_brace:end_brace+1]
+                text = text.strip()
+                
+                # Parse JSON with fallback
+                try:
+                    return json.loads(text)
+                except json.JSONDecodeError:
+                    fixed = re.sub(r"'(\w+)':", r'"\1":', text)
+                    fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
+                    return json.loads(fixed)
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 1:
+                    time.sleep(5)
+                else:
+                    break  # Try next model
+            except Exception:
+                if attempt < 1:
+                    time.sleep(2)
+                else:
+                    break  # Try next model
     
+    print(f"  Gemini unavailable (all models/retries exhausted)", file=sys.stderr)
+    return None
     return None
 
 def time_to_tick(t, bpm):
