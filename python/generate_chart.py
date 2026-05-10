@@ -38,23 +38,30 @@ def generate_chart(analysis_data, metadata):
         lines.append(f'  {tick} = B {bpm}')
     lines.append("}")
     
-    # [Events] - Section markers
-    lines.append("[Events]")
-    lines.append("{")
-    lines.append('  5760 = E "crowd_noclap"')
+    # [Events] - Must be sorted by tick ascending
+    events = []
+    events.append((5760, 'E "crowd_noclap"'))
+    events.append((5760, 'E "section intro"'))
     
-    # Music start at first section
+    # Music start
     sections = analysis_data.get("sections", [])
     if sections:
         first_start = sections[0]["start"] * 480 * (tempo_map[0]["bpm"] / 1000.0) / 60.0
         music_start_tick = int(first_start)
-        lines.append(f'  {music_start_tick} = E "music_start"')
+        events.append((music_start_tick, 'E "music_start"'))
     
     for sec in analysis_data.get("section_events", []):
         name = sec["name"]
         tick = sec["tick"]
-        lines.append(f'  {tick} = E "section {name}"')
+        events.append((tick, f'E "section {name}"'))
     
+    # Sort by tick
+    events.sort(key=lambda x: x[0])
+    
+    lines.append("[Events]")
+    lines.append("{")
+    for tick, event_str in events:
+        lines.append(f"  {tick} = {event_str}")
     lines.append("}")
     
     # Note tracks - Expert, Hard, Medium, Easy
