@@ -98,7 +98,12 @@ Examples:
       encoding: 'utf-8',
       timeout: 120000,
       maxBuffer: 50 * 1024 * 1024,
-      env: { ...process.env, GEMINI_API_KEY: GEMINI_KEY }
+      env: { 
+        ...process.env, 
+        GEMINI_API_KEY: GEMINI_KEY,
+        SONG_NAME: metadata.name,
+        SONG_ARTIST: metadata.artist,
+      }
     });
     analysis = JSON.parse(result);
     if (analysis.error) {

@@ -55,6 +55,12 @@ def generate_chart(analysis_data, metadata):
         tick = sec["tick"]
         events.append((tick, f'E "section {name}"'))
     
+    # Add lyrics events
+    for lyric in analysis_data.get("lyrics", []):
+        tick = lyric["tick"]
+        word = lyric["word"]
+        events.append((tick, f'E "lyric {word}"'))
+    
     # Sort by tick
     events.sort(key=lambda x: x[0])
     

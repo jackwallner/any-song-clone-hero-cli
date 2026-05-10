@@ -19,7 +19,7 @@ def ticks_to_time(tick, tempo):
     """Convert ticks to seconds."""
     return tick * 60.0 / (RESOLUTION * tempo)
 
-def analyze_audio(filepath, gemini_key=None):
+def analyze_audio(filepath, gemini_key=None, metadata=None):
     """Full audio analysis pipeline."""
     
     print("Loading audio...", file=sys.stderr)
@@ -75,12 +75,21 @@ def analyze_audio(filepath, gemini_key=None):
     
     # Use Gemini to enhance the analysis
     ai_suggestions = None
+    lyrics = None
     if gemini_key:
         try:
             ai_suggestions = get_gemini_analysis(gemini_key, tempo, estimated_key, 
-                                                  sections, duration, onset_notes)
+                                                  sections, duration, onset_notes,
+                                                  metadata.get("name", ""), metadata.get("artist", ""))
         except Exception as e:
             print(f"  Gemini analysis failed (continuing without): {e}", file=sys.stderr)
+        
+        # Get lyrics from Gemini too
+        try:
+            lyrics = get_gemini_lyrics(gemini_key, metadata.get("name", ""), 
+                                        metadata.get("artist", ""), tempo, sections, duration)
+        except Exception as e:
+            print(f"  Gemini lyrics failed (continuing without): {e}", file=sys.stderr)
     
     # Map to frets (uses AI fret_mapping if available)
     fret_map = build_fret_map(estimated_key, ai_suggestions)
@@ -109,6 +118,7 @@ def analyze_audio(filepath, gemini_key=None):
         "beat_times": [float(t) for t in beat_times],
         "onset_count": len(onset_notes),
         "ai_enhanced": ai_suggestions is not None,
+        "lyrics": lyrics if lyrics else [],
     }
 
 def detect_sections(y, sr, rms, spectral_centroid, beat_times, onset_times):
@@ -212,124 +222,212 @@ def build_fret_map(estimated_key, ai_suggestions=None):
     return fret_map
 
 def generate_all_difficulties(onset_notes, beat_times, sections, tempo, fret_map, ai_suggestions, duration):
-    """Generate notes for Easy, Medium, Hard, Expert. Uses AI params if available."""
+    """Generate notes per difficulty using independent grid selection + AI section patterns."""
     
-    # Default params per difficulty
-    defaults = {
-        "easy":    {"density": 0.25, "min_interval": 0.20, "use_orange": False, "use_chords": False},
-        "medium":  {"density": 0.50, "min_interval": 0.12, "use_orange": False, "use_chords": False},
-        "hard":    {"density": 0.70, "min_interval": 0.08, "use_orange": True,  "use_chords": True},
-        "expert":  {"density": 0.90, "min_interval": 0.06, "use_orange": True,  "use_chords": True},
-    }
+    beat_interval = 60.0 / tempo
+    res = RESOLUTION
+    use_16th = tempo > 140
+    base_spacing = beat_interval / (4 if use_16th else 2)
+    steps_per_beat = 4 if use_16th else 2
     
-    # Override with AI suggestions if available
-    if ai_suggestions and "difficulty_params" in ai_suggestions:
-        ai_params = ai_suggestions["difficulty_params"]
-        for diff_name in defaults:
-            if diff_name in ai_params:
-                ap = ai_params[diff_name]
-                if isinstance(ap, dict):
-                    if "density" in ap:
-                        defaults[diff_name]["density"] = float(ap["density"])
-                    if "min_interval" in ap:
-                        defaults[diff_name]["min_interval"] = float(ap["min_interval"])
+    grid_times, is_beat_pos, grid_has_onset = [], [], []
+    t = 0.0
+    while t < duration + base_spacing:
+        grid_times.append(t)
+        is_beat_pos.append(len(is_beat_pos) % steps_per_beat == 0)
+        grid_has_onset.append(False)
+        t += base_spacing
+    
+    for o in onset_notes:
+        idx = int(o["time"] / base_spacing)
+        if 0 <= idx < len(grid_times):
+            grid_has_onset[idx] = True
+    
+    def fret_at(time):
+        d_best, f_best = 99, 0
+        for o in onset_notes:
+            d = abs(o["time"] - time)
+            if d < d_best:
+                d_best, f_best = d, fret_map.get(o["pitch_class"], 0)
+        return f_best if d_best < 0.15 else None
+    
+    # AI intelligence
+    style = ai_suggestions.get("style", "pop") if ai_suggestions else "pop"
+    fw = ai_suggestions.get("fret_emphasis", [5,5,5,5,3]) if ai_suggestions else [5,5,5,5,3]
+    if isinstance(fw, list) and len(fw) >= 5:
+        fw = [float(x)*10 for x in fw[:5]]
+    else:
+        fw = [5,5,5,5,3]
+    sp = ai_suggestions.get("sections", {}) if ai_suggestions else {}
+    
+    w_sum = sum(fw)
+    fret_probs = [w/w_sum for w in fw]
+    def wf(): return int(np.random.choice(5, p=fret_probs))
+    
+    pcr = {"single_note":0.05,"chords":0.45,"arpeggios":0.10,"power_chords":0.55,"strumming":0.40}
+    psr = {"single_note":0.20,"chords":0.12,"arpeggios":0.15,"power_chords":0.05,"strumming":0.08}
+    
+    sec_map = []
+    for sec in sections:
+        label = sec.get("label","")
+        s = sp.get(label, {})
+        p = s.get("pattern","single_note") if isinstance(s,dict) else "single_note"
+        i = float(s.get("intensity",5)) if isinstance(s,dict) else 5
+        sec_map.append((sec["start"], sec["end"], p, i))
+    
+    def sec_at(t):
+        for st,en,p,i in sec_map:
+            if st <= t < en: return p, i
+        return "single_note", 5
     
     difficulties = {}
     
-    # Expert: dense, all notes
-    p = defaults["expert"]
-    difficulties["ExpertSingle"] = generate_notes(onset_notes, beat_times, tempo,
-                                                    fret_map, density=p["density"],
-                                                    use_orange=p["use_orange"], use_chords=p["use_chords"],
-                                                    min_interval=p["min_interval"])
+    # Expert: all grid positions, heavy chords, orange allowed
+    exp = []
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        pat, its = sec_at(time)
+        cr = pcr.get(pat, 0.2) * (its/5.0) * 1.5
+        f = fret_at(time) if grid_has_onset[i] else None
+        fret = min(f, 4) if f is not None else wf()
+        tick = time_to_tick(time, tempo)
+        exp.append({"tick":tick,"fret":fret,"length":0})
+        if np.random.random() < cr:
+            exp.append({"tick":tick,"fret":(fret+2)%5,"length":0})
+    exp.sort(key=lambda n:(n["tick"],n["fret"]))
+    difficulties["ExpertSingle"] = exp
     
-    # Hard: medium-high density
-    p = defaults["hard"]
-    difficulties["HardSingle"] = generate_notes(onset_notes, beat_times, tempo,
-                                                  fret_map, density=p["density"],
-                                                  use_orange=p["use_orange"], use_chords=p["use_chords"],
-                                                  min_interval=p["min_interval"])
+    # Hard: beats + every 2nd subdivision, orange, moderate chords
+    hrd = []
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        if not is_beat_pos[i] and i%2 != 0: continue
+        pat, its = sec_at(time)
+        cr = pcr.get(pat, 0.2) * (its/5.0)
+        f = fret_at(time) if grid_has_onset[i] else None
+        fret = min(f, 4) if f is not None else wf()
+        tick = time_to_tick(time, tempo)
+        hrd.append({"tick":tick,"fret":fret,"length":0})
+        if is_beat_pos[i] and np.random.random() < cr:
+            hrd.append({"tick":tick,"fret":(fret+2)%5,"length":0})
+    hrd.sort(key=lambda n:(n["tick"],n["fret"]))
+    difficulties["HardSingle"] = hrd
     
-    # Medium: medium density, no orange
-    p = defaults["medium"]
-    difficulties["MediumSingle"] = generate_notes(onset_notes, beat_times, tempo,
-                                                    fret_map, density=p["density"],
-                                                    use_orange=p["use_orange"], use_chords=p["use_chords"],
-                                                    min_interval=p["min_interval"])
+    # Medium: beats only, no orange, some sustains, medium chords
+    med = []
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        if not is_beat_pos[i]: continue
+        pat, its = sec_at(time)
+        cr = pcr.get(pat, 0.1) * (its/5.0) * 0.8
+        sr = psr.get(pat, 0.1)
+        f = fret_at(time) if grid_has_onset[i] else None
+        fret = min(f, 3) if f is not None else min(wf(), 3)
+        tick = time_to_tick(time, tempo)
+        length = int(beat_interval*1.5*res*tempo/60.0) if np.random.random()<sr else 0
+        med.append({"tick":tick,"fret":fret,"length":length})
+        if np.random.random() < cr:
+            med.append({"tick":tick,"fret":min((fret+2)%5,3),"length":0})
+    med.sort(key=lambda n:(n["tick"],n["fret"]))
+    difficulties["MediumSingle"] = med
     
-    # Easy: simple
-    p = defaults["easy"]
-    difficulties["EasySingle"] = generate_notes(onset_notes, beat_times, tempo,
-                                                  fret_map, density=p["density"],
-                                                  use_orange=p["use_orange"], use_chords=p["use_chords"],
-                                                  min_interval=p["min_interval"])
+    # Easy: every other beat, heavy sustains, minimal chords
+    easy = []
+    bi = 0
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        if not is_beat_pos[i]: continue
+        bi += 1
+        if bi % 2 != 0: continue
+        pat, its = sec_at(time)
+        sr = psr.get(pat, 0.1) * 2.0
+        f = fret_at(time) if grid_has_onset[i] else None
+        fret = min(f, 3) if f is not None else min(wf(), 3)
+        tick = time_to_tick(time, tempo)
+        length = int(beat_interval*2.0*res*tempo/60.0) if np.random.random()<sr else 0
+        easy.append({"tick":tick,"fret":fret,"length":length})
+        if np.random.random() < 0.03:
+            easy.append({"tick":tick,"fret":min((fret+1)%5,3),"length":0})
+    easy.sort(key=lambda n:(n["tick"],n["fret"]))
+    difficulties["EasySingle"] = easy
     
     return difficulties
 
-def generate_notes(onset_notes, beat_times, bpm, fret_map, density=0.5,
-                   use_orange=False, use_chords=False, min_interval=0.12):
-    """Generate note events for a specific difficulty."""
+def get_gemini_lyrics(api_key, song_name, artist, tempo, sections, duration):
+    """Get synced lyrics from Gemini, aligned to section boundaries."""
+    import urllib.request, time
     
-    notes = []
-    last_note_time = -min_interval
-    beat_set = set(np.round(beat_times, 3))
+    if not song_name:
+        return []
     
-    for onset in onset_notes:
-        t = onset["time"]
-        
-        # Skip if too close to last note
-        if t - last_note_time < min_interval:
-            continue
-        
-        # Density filter based on beat alignment
-        is_on_beat = any(abs(t - bt) < 0.05 for bt in beat_times)
-        is_strong_beat = any(abs(t - bt) < 0.05 for i, bt in enumerate(beat_times) if i % 2 == 0)
-        
-        # Probability of including this note
-        if is_strong_beat:
-            prob = density * 1.5
-        elif is_on_beat:
-            prob = density
-        else:
-            prob = density * 0.3
-        
-        if np.random.random() > min(prob, 0.95):
-            continue
-        
-        # Get fret
-        pc = onset["pitch_class"]
-        fret = fret_map.get(pc, 0)
-        
-        # Filter orange for lower difficulties
-        if fret == 4 and not use_orange:
-            # Remap to a non-orange fret
-            fret = min(fret_map.values())  # fallback to root
-        
-        # Note length based on position in beat
-        length = 0
-        if is_strong_beat and density > 0.5:
-            # Occasional sustains on strong beats
-            if np.random.random() < 0.15:
-                # Find next beat for sustain
-                for bt in beat_times:
-                    if bt > t + 0.1:
-                        length_sec = min(bt - t, 1.0)
-                        length = int(length_sec * RESOLUTION * bpm / 60.0)
-                        break
-        
-        tick = time_to_tick(t, bpm)
-        
-        notes.append({
-            "tick": tick,
-            "fret": fret,
-            "length": length
-        })
-        
-        last_note_time = t
+    sec_json = json.dumps([{
+        "start": round(s["start"], 1), 
+        "end": round(s["end"], 1), 
+        "label": s["label"]
+    } for s in sections[:10]])
     
-    return notes
+    prompt = f"""Write the full lyrics for "{song_name}" by {artist}. 
+Include ALL verses, choruses, bridges. Distribute lyrics across these sections:
+{sec_json}
 
-def get_gemini_analysis(api_key, tempo, key, sections, duration, onset_notes):
+Return ONLY a JSON array of lyric events: [{{"time":seconds,"word":"word"}},...].
+Each word/phrase at its approximate time. Include ALL lyrics.
+JSON only, no markdown."""
+
+    req_data = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 4096}
+    }).encode()
+    
+    models = [
+        "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-flash-lite",
+    ]
+    
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(url, data=req_data,
+                                              headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    result = json.loads(resp.read())
+                text = result["candidates"][0]["content"]["parts"][0]["text"]
+                text = text.strip()
+                
+                # Extract JSON array
+                start = text.find('[')
+                end = text.rfind(']')
+                if start >= 0 and end > start:
+                    text = text[start:end+1]
+                
+                if text.startswith("```"):
+                    first_nl = text.find('\n')
+                    text = text[first_nl+1:] if first_nl > 0 else text[3:]
+                if text.rstrip().endswith("```"):
+                    text = text.rstrip()[:-3].strip()
+                
+                lyrics = json.loads(text)
+                # Convert to events with tick
+                lyric_events = []
+                for item in lyrics:
+                    if isinstance(item, dict) and "time" in item and "word" in item:
+                        t = float(item["time"])
+                        tick = time_to_tick(t, tempo)
+                        word = str(item["word"]).replace('"', "'")
+                        lyric_events.append({"tick": tick, "word": word})
+                lyric_events.sort(key=lambda x: x["tick"])
+                return lyric_events
+            except Exception:
+                if attempt < 1:
+                    time.sleep(2)
+                else:
+                    break
+    
+    return []
+
+
+def get_gemini_analysis(api_key, tempo, key, sections, duration, onset_notes, song_name="", artist=""):
     """Use Gemini to enhance analysis. Compact prompt, retry on rate limit."""
     import urllib.request, time
     
@@ -347,20 +445,33 @@ def get_gemini_analysis(api_key, tempo, key, sections, duration, onset_notes):
     avg_onsets_per_sec = onset_count / max(duration, 1)
     pc_dist = [onset_pcs.count(i) for i in range(12)]
     
-    prompt = f"""Song: {tempo:.0f} BPM, key PC={key}, {duration:.0f}s, {onset_count} onsets ({avg_onsets_per_sec:.1f}/s).
-Pitch class distribution: {pc_dist}
-Sections: {sec_json}
+    prompt = f"""You are an expert Clone Hero charter. Design the Medium difficulty guitar chart for this song.
 
-Return JSON:
-{{"fret_mapping": {{0:x,1:x,2:x,3:x,4:x}}, "difficulty_params": {{"easy":{{"density":x,"min_interval":x}},
-"medium":{{"density":x,"min_interval":x}},"hard":{{"density":x,"min_interval":x}},"expert":{{"density":x,"min_interval":x}}}}}}
+Song: "{song_name}" by {artist}
+Detected: {tempo:.0f} BPM, key PC={key}, {duration:.0f}s
+Section timestamps: {sec_json}
 
-Map pitch classes 0-11→frets 0-4 based on key. Density 0-1. min_interval in seconds.
-JSON only, no markdown."""
+Based on your knowledge of this song, return EXACTLY this JSON:
+
+{{
+  "style": "pop|rock|punk|ballad|metal",
+  "fret_emphasis": [green_weight, red_weight, yellow_weight, blue_weight, orange_weight],
+  "sections": {{
+    "label_name": {{"pattern": "single_note|chords|power_chords|strumming|arpeggios", "intensity": 1-10}},
+    ...
+  }},
+  "charter_note": "one sentence of musical direction for the Medium charter"
+}}
+
+RULES:
+- fret_emphasis: 5 floats that sum to 1.0. Higher = more notes on that color. orange=0 for Medium.
+- pattern: match what the guitar actually plays in this section
+- intensity: 1=very sparse notes, 5=normal, 10=wall of notes
+- Only output JSON. No markdown, no explanation."""
 
     req_data = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048}
     }).encode()
     
     # Try primary model, fall back to backup
@@ -396,11 +507,32 @@ JSON only, no markdown."""
                 
                 # Parse JSON with fallback
                 try:
-                    return json.loads(text)
+                    data = json.loads(text)
                 except json.JSONDecodeError:
                     fixed = re.sub(r"'(\w+)':", r'"\1":', text)
                     fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
-                    return json.loads(fixed)
+                    data = json.loads(fixed)
+                
+                # Validate AI output
+                valid = True
+                if "fret_emphasis" not in data:
+                    valid = False
+                elif isinstance(data["fret_emphasis"], list):
+                    fw = data["fret_emphasis"]
+                    # Normalize to sum to 1.0
+                    total = sum(float(x) for x in fw[:5])
+                    if total > 0:
+                        data["fret_emphasis"] = [float(x)/total for x in fw[:5]]
+                if "sections" not in data:
+                    valid = False
+                if not valid:
+                    continue  # Try next model
+                
+                print(f"  AI: style={data.get('style','?')} sections={len(data.get('sections',{}))} patterns", file=sys.stderr)
+                if data.get("charter_note"):
+                    print(f"  AI note: {data['charter_note'][:120]}", file=sys.stderr)
+                
+                return data
             except urllib.error.HTTPError as e:
                 if e.code == 429 and attempt < 1:
                     time.sleep(5)
@@ -434,5 +566,10 @@ if __name__ == "__main__":
         sys.exit(1)
     
     key = GEMINI_KEY if use_gemini else None
-    result = analyze_audio(audio_file, gemini_key=key)
+    # Build metadata from env vars if available
+    metadata = {
+        "name": os.environ.get("SONG_NAME", ""),
+        "artist": os.environ.get("SONG_ARTIST", ""),
+    }
+    result = analyze_audio(audio_file, gemini_key=key, metadata=metadata)
     print(json.dumps(result))
