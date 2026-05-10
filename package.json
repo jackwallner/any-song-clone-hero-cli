@@ -1,0 +1,14 @@
+{
+  "name": "any-song-clone-hero",
+  "version": "1.0.0",
+  "description": "Generate Clone Hero charts from Spotify links with AI-powered note generation",
+  "main": "index.js",
+  "bin": {
+    "songhero": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["clone-hero", "chart", "spotify", "guitar-hero"],
+  "license": "MIT"
+}

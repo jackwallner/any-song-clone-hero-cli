@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Generate Clone Hero .chart file from analysis data."""
+
+import sys, json, os
+
+def generate_chart(analysis_data, metadata):
+    """Generate full .chart file content."""
+    
+    lines = []
+    
+    # [Song] header
+    lines.append("[Song]")
+    lines.append("{")
+    lines.append(f'  Name = "{metadata.get("name", "Unknown")}"')
+    lines.append(f'  Artist = "{metadata.get("artist", "Unknown")}"')
+    lines.append(f'  Album = "{metadata.get("album", "")}"')
+    
+    song_length = analysis_data.get("duration_ms", 0)
+    lines.append(f'  SongLength = {song_length}')
+    
+    lines.append('  Offset = 0')
+    lines.append('  Resolution = 480')
+    lines.append('  Player2 = bass')
+    lines.append('  Difficulty = 0')
+    lines.append('  PreviewStart = 0')
+    lines.append('  PreviewEnd = 0')
+    
+    genre = metadata.get("genre", "rock")
+    lines.append(f'  Genre = "{genre}"')
+    lines.append('  MediaType = "cd"')
+    
+    # Use song.opus if exists, otherwise song.mp3
+    lines.append(f'  MusicStream = "song.opus"')
+    lines.append("}")
+    
+    # [SyncTrack] - Tempo map
+    lines.append("[SyncTrack]")
+    lines.append("{")
+    tempo_map = analysis_data.get("tempo_map", [{"tick": 0, "bpm": 120000}])
+    lines.append(f'  0 = TS 4')
+    for entry in tempo_map:
+        tick = entry["tick"]
+        bpm = entry["bpm"]
+        lines.append(f'  {tick} = B {bpm}')
+    lines.append("}")
+    
+    # [Events] - Section markers
+    lines.append("[Events]")
+    lines.append("{")
+    lines.append('  5760 = E "crowd_noclap"')
+    
+    # Music start at first section
+    sections = analysis_data.get("sections", [])
+    if sections:
+        first_start = sections[0]["start"] * 480 * (tempo_map[0]["bpm"] / 1000.0) / 60.0
+        music_start_tick = int(first_start)
+        lines.append(f'  {music_start_tick} = E "music_start"')
+    
+    for sec in analysis_data.get("section_events", []):
+        name = sec["name"]
+        tick = sec["tick"]
+        lines.append(f'  {tick} = E "section {name}"')
+    
+    lines.append("}")
+    
+    # Note tracks - Expert, Hard, Medium, Easy
+    difficulties = analysis_data.get("difficulties", {})
+    diff_order = ["ExpertSingle", "HardSingle", "MediumSingle", "EasySingle"]
+    
+    for diff_name in diff_order:
+        notes = difficulties.get(diff_name, [])
+        if not notes:
+            continue
+        
+        lines.append(f"[{diff_name}]")
+        lines.append("{")
+        for note in notes:
+            tick = note["tick"]
+            fret = note["fret"]
+            length = note.get("length", 0)
+            lines.append(f"  {tick} = N {fret} {length}")
+        lines.append("}")
+    
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: generate_chart.py <analysis.json> <metadata.json>", file=sys.stderr)
+        sys.exit(1)
+    
+    with open(sys.argv[1]) as f:
+        analysis = json.load(f)
+    with open(sys.argv[2]) as f:
+        metadata = json.load(f)
+    
+    chart = generate_chart(analysis, metadata)
+    print(chart)

@@ -1,0 +1,13 @@
+node_modules/
+output/
+*.opus
+*.mp3
+*.mp4
+*.webm
+*.mkv
+__pycache__/
+*.pyc
+.env
+.DS_Store
+reference_*
+.commandcode/
