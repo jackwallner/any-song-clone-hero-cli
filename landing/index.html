@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SongHero — AI Clone Hero Charts From Any Song</title>
+  <meta name="description" content="Paste a Spotify link, get a fully playable Clone Hero chart. AI-powered note generation, 4 difficulties, synced lyrics, playlist mode, music video support.">
+  <meta property="og:title" content="SongHero — AI Clone Hero Charts From Any Song">
+  <meta property="og:description" content="Paste a Spotify link, get a Clone Hero chart instantly. Tracks, playlists, synced lyrics, AI enhancement.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='28' font-size='28'>🎸</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:      #fafaf8;
+      --bg2:     #f0eeea;
+      --bg3:     #e4e0d8;
+      --fg:      #1a1715;
+      --fg2:     #6b6258;
+      --fg3:     #4a4239;
+      --gold:    #b8933a;
+      --gold-bright: #d4a853;
+      --gold-dim:    #8a6d2e;
+      --red:     #c0392b;
+      --red-bright: #d94040;
+      --amber:   #d4781a;
+      --wood:    #8b6914;
+      --border:  #ddd9d0;
+      --radius:  6px;
+      --radius-lg: 10px;
+      --shadow:  0 4px 24px rgba(0,0,0,0.08);
+    }
+
+    * { margin:0; padding:0; box-sizing:border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background:
+        radial-gradient(ellipse 70% 50% at 50% -10%, rgba(184,147,58,0.05), transparent),
+        radial-gradient(ellipse 40% 30% at 85% 60%, rgba(192,57,43,0.03), transparent),
+        var(--bg);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Fret inlay diamond pattern (subtle background) ── */
+    .fret-bg {
+      position: fixed; inset: 0; pointer-events: none; z-index: -1;
+      background-image:
+        radial-gradient(circle at 20% 30%, rgba(184,147,58,0.04) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(192,57,43,0.03) 0%, transparent 50%);
+      mask-image: linear-gradient(to bottom, transparent 10%, #000 30%, #000 70%, transparent 90%);
+    }
+
+    /* ── Horizontal string accent lines ── */
+    .string-line {
+      position: fixed; left: 0; right: 0; height: 1px;
+      pointer-events: none; z-index: -1;
+      background: linear-gradient(90deg, transparent, rgba(184,147,58,0.08) 20%, rgba(184,147,58,0.08) 80%, transparent);
+    }
+    .string-line:nth-child(1) { top: 15%; }
+    .string-line:nth-child(2) { top: 40%; }
+    .string-line:nth-child(3) { top: 65%; }
+    .string-line:nth-child(4) { top: 85%; }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed; top:0; left:0; right:0; z-index:100;
+      background: rgba(250,250,248,0.9);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+    .nav-inner {
+      max-width: 1100px; margin:0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 56px;
+    }
+    .nav-logo {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px; letter-spacing: 1px;
+      display: flex; align-items: center; gap: 8px;
+      color: var(--fg); text-decoration: none;
+    }
+    .nav-logo .logo-guitar {
+      display: inline-block;
+      width: 24px; height: 24px;
+      background: linear-gradient(135deg, var(--gold), var(--amber));
+      clip-path: polygon(50% 0%, 80% 20%, 80% 60%, 65% 100%, 35% 100%, 20% 60%, 20% 20%);
+      flex-shrink: 0;
+    }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a {
+      color: var(--fg2); text-decoration: none; font-size: 14px;
+      font-weight: 500; transition: color .15s;
+    }
+    .nav-links a:hover { color: var(--gold); }
+    .nav-cta {
+      background: var(--gold); color: #1a1715;
+      padding: 7px 16px; border-radius: var(--radius);
+      font-size: 13px; font-weight: 700; text-decoration: none;
+      letter-spacing: 0.5px;
+      transition: background .15s, transform .15s;
+    }
+    .nav-cta:hover { background: var(--gold-bright); transform: translateY(-1px); }
+
+    /* ── Sections ── */
+    section { padding: 100px 24px; position: relative; }
+    .container { max-width: 1100px; margin:0 auto; }
+
+    /* ── Hero ── */
+    .hero { padding-top: 160px; padding-bottom: 80px; text-align: center; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(184,147,58,0.1); border: 1px solid rgba(184,147,58,0.2);
+      color: var(--gold-dim); padding: 6px 16px; border-radius: 100px;
+      font-size: 13px; font-weight: 600; margin-bottom: 28px;
+      backdrop-filter: blur(4px);
+    }
+    .hero-badge .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--red-bright); animation: amp-glow 1.5s ease-in-out infinite;
+    }
+    @keyframes amp-glow { 0%,100%{box-shadow:0 0 4px var(--red-bright);opacity:1} 50%{box-shadow:0 0 8px var(--red-bright);opacity:.6} }
+
+    .hero h1 {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(44px, 8vw, 80px);
+      font-weight: 400; letter-spacing: 0px;
+      line-height: 0.95; margin-bottom: 20px;
+      text-transform: uppercase;
+    }
+    .hero h1 .gold { color: var(--gold); }
+    .hero h1 .red { color: var(--red); }
+    .hero h1 .outline {
+      -webkit-text-stroke: 1.5px var(--fg);
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+    }
+
+    .hero p.sub {
+      font-size: 18px; color: var(--fg2); max-width: 540px;
+      margin: 0 auto 40px; line-height: 1.6;
+    }
+
+    /* ── Terminal Block ── */
+    .terminal {
+      max-width: 660px; margin: 0 auto 28px;
+      background: #f5f4f0; border: 1px solid var(--border);
+      border-radius: var(--radius-lg); overflow: hidden;
+      text-align: left; box-shadow: var(--shadow);
+    }
+    .terminal-bar {
+      background: #edebe6; padding: 10px 14px;
+      display: flex; align-items: center; gap: 8px;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+    }
+    .terminal-bar::after {
+      content: '';
+      position: absolute; bottom: -1px; left: 20%; right: 20%; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--gold-dim), transparent);
+    }
+    .terminal-bar .t-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .terminal-bar .t-dot.r { background: #e74c3c; }
+    .terminal-bar .t-dot.y { background: #f0c060; }
+    .terminal-bar .t-dot.g { background: #27ae60; }
+    .terminal-bar .title {
+      flex: 1; text-align: center;
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      color: var(--fg2); margin-right: 28px;
+    }
+    .terminal-body {
+      padding: 20px 20px 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; line-height: 1.7;
+      overflow-x: auto; white-space: nowrap;
+    }
+    .prompt { color: var(--gold); }
+    .cmd { color: var(--fg); }
+    .flag { color: var(--red-bright); }
+    .url-clr { color: #2563eb; }
+    .out { color: var(--fg2); font-size: 12px; margin-top: 6px; }
+
+    .hero-actions { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 14px 30px; border-radius: var(--radius);
+      font-size: 15px; font-weight: 700;
+      text-decoration: none; transition: all .2s;
+      cursor: pointer; border: none;
+      letter-spacing: 0.5px;
+      position: relative; overflow: hidden;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+      color: #fff;
+      box-shadow: 0 0 20px rgba(184,147,58,0.2);
+    }
+    .btn-primary::after {
+      content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+      transition: left .4s;
+    }
+    .btn-primary:hover::after { left: 100%; }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 30px rgba(184,147,58,0.35);
+    }
+    .btn-secondary {
+      background: transparent; color: var(--fg);
+      border: 1.5px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--gold-dim); color: var(--gold); }
+
+    /* ── Fret divider ── */
+    .fret-divider {
+      display: flex; align-items: center; gap: 16px; max-width: 300px;
+      margin: 0 auto; padding: 40px 0 20px;
+    }
+    .fret-divider .fret-line { flex: 1; height: 1px; background: var(--border); }
+    .fret-marker {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--gold-dim);
+      box-shadow: 0 0 8px rgba(184,147,58,0.25);
+    }
+
+    /* ── Section labels ── */
+    .section-label {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 17px; letter-spacing: 3px;
+      color: var(--gold); margin-bottom: 12px;
+      text-transform: uppercase;
+    }
+    .section-label::before, .section-label::after {
+      content: '◆'; font-size: 6px; opacity: 0.5;
+    }
+
+    .section-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(32px, 5vw, 48px);
+      font-weight: 400; letter-spacing: 0.5px;
+      margin-bottom: 14px; text-transform: uppercase;
+      line-height: 1.05;
+    }
+    .section-desc {
+      color: var(--fg2); font-size: 16px; line-height: 1.6;
+      max-width: 580px; margin-bottom: 48px;
+    }
+
+    /* ── Feature Cards ── */
+    .feature-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 32px 28px;
+      position: relative; overflow: hidden;
+      transition: border-color .25s, transform .25s;
+    }
+    .feature-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--gold-dim), transparent);
+      opacity: 0; transition: opacity .25s;
+    }
+    .feature-card:hover::before { opacity: 1; }
+    .feature-card:hover {
+      border-color: rgba(184,147,58,0.35);
+      transform: translateY(-3px);
+    }
+    .feature-icon {
+      font-size: 32px; margin-bottom: 16px;
+      display: inline-block;
+      background: rgba(184,147,58,0.1);
+      width: 52px; height: 52px; border-radius: var(--radius);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .feature-card h3 {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px; font-weight: 400;
+      letter-spacing: 0.5px; margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+    .feature-card p { color: var(--fg2); font-size: 14px; line-height: 1.6; }
+
+    /* ── How It Works ── */
+    .steps {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px;
+      position: relative;
+    }
+    .step {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 32px 28px 28px;
+      position: relative;
+      transition: border-color .25s, transform .25s;
+    }
+    .step:hover { border-color: rgba(184,147,58,0.3); transform: translateY(-2px); }
+
+    .step-num {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 64px; color: #e8e4dd;
+      position: absolute; top: 10px; right: 18px;
+      line-height: 1; pointer-events: none;
+      transition: color .25s;
+    }
+    .step:hover .step-num { color: rgba(184,147,58,0.15); }
+
+    .step h3 {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 20px; font-weight: 400; letter-spacing: 0.5px;
+      margin-bottom: 6px; text-transform: uppercase;
+    }
+    .step p { color: var(--fg2); font-size: 14px; line-height: 1.5; position: relative; z-index: 1; }
+
+    /* ── Difficulty Table ── */
+    .diff-table-wrap {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .diff-table {
+      width: 100%; border-collapse: collapse;
+    }
+    .diff-table th {
+      text-align: left; padding: 14px 20px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 14px; letter-spacing: 1px;
+      color: var(--gold-dim); font-weight: 400;
+      background: rgba(184,147,58,0.06); border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+    }
+    .diff-table td {
+      padding: 14px 20px; font-size: 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--fg3);
+    }
+    .diff-table tr:last-child td { border-bottom: none; }
+    .diff-table tr:hover td { background: rgba(184,147,58,0.05); }
+    .diff-name {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 18px; letter-spacing: 0.5px; color: var(--fg) !important;
+    }
+    .check { color: #27ae60; }
+    .cross { color: rgba(231,76,60,0.6); }
+
+    /* ── Install Section ── */
+    .install-section { padding-top: 40px; }
+    .install-block { max-width: 700px; margin: 0 auto; }
+
+    .install-tabs {
+      display: flex; gap: 0; margin-bottom: -1px;
+    }
+    .install-tab {
+      padding: 10px 24px; font-size: 13px; font-weight: 700;
+      background: transparent; border: 1px solid transparent;
+      color: var(--fg2); cursor: pointer; border-radius: var(--radius) var(--radius) 0 0;
+      transition: all .15s;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.5px;
+    }
+    .install-tab.active {
+      background: #f5f4f0; color: var(--gold);
+      border-color: var(--border); border-bottom-color: #f5f4f0;
+    }
+    .install-tab:hover:not(.active) { color: var(--fg); }
+
+    .install-terminal {
+      background: #f5f4f0; border: 1px solid var(--border);
+      border-radius: 0 var(--radius-lg) var(--radius-lg) var(--radius-lg);
+      padding: 24px; font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; line-height: 1.8; position: relative;
+      overflow-x: auto;
+    }
+    .install-terminal .dollar { color: var(--gold); user-select: none; }
+    .copy-btn {
+      position: absolute; top: 10px; right: 10px;
+      background: var(--bg3); border: 1px solid var(--border);
+      color: var(--fg2); padding: 5px 14px; border-radius: 4px;
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      transition: all .15s; font-family: 'Inter', sans-serif;
+      letter-spacing: 0.5px;
+    }
+    .copy-btn:hover { background: var(--gold); color: #fff; border-color: var(--gold); }
+    .copy-btn.copied { background: #27ae60; color: #fff; border-color: #27ae60; }
+
+    .prereq-note {
+      color: var(--fg2); font-size: 13px; margin-top: 14px;
+      text-align: center; line-height: 1.6;
+    }
+    .prereq-note code {
+      background: var(--bg3); padding: 2px 7px; border-radius: 3px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      color: var(--fg3);
+    }
+
+    /* ── Output Tree ── */
+    .output-tree {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 28px;
+      font-family: 'JetBrains Mono', monospace; font-size: 13px;
+      line-height: 1.9; color: var(--fg2);
+      box-shadow: var(--shadow);
+    }
+    .output-tree .dir { color: var(--gold); }
+    .output-tree .file { color: var(--fg3); }
+    .output-tree .comment { color: #a09888; }
+
+    /* ── Amp Grille Section (between features) ── */
+    .grille {
+      height: 40px; margin: 0 24px;
+      background-image: radial-gradient(circle at center, var(--border) 1px, transparent 1px);
+      background-size: 12px 12px;
+      opacity: 0.5;
+      border-radius: 4px;
+    }
+
+    /* ── CTA Bottom ── */
+    .cta-section {
+      text-align: center; padding: 100px 24px 120px; position: relative;
+    }
+    .cta-section::before {
+      content: ''; position: absolute; top: 30px; left: 50%;
+      transform: translateX(-50%);
+      width: 100px; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--gold-dim), transparent);
+    }
+    .cta-section h2 {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(36px, 5vw, 56px);
+      font-weight: 400; letter-spacing: 1px;
+      margin-bottom: 12px; text-transform: uppercase;
+    }
+    .cta-section p { color: var(--fg2); font-size: 17px; margin-bottom: 36px; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 24px 40px; text-align: center;
+      font-size: 13px; color: var(--fg2);
+    }
+    footer a { color: var(--gold-dim); text-decoration: none; }
+    footer a:hover { color: var(--gold); }
+
+    /* ── Knob decoration for headings ── */
+    .knob-row {
+      display: flex; gap: 16px; align-items: center; margin-bottom: 16px;
+      opacity: 0.35;
+    }
+    .knob {
+      width: 10px; height: 10px; border-radius: 50%;
+      border: 1.5px solid var(--gold-dim);
+      position: relative;
+    }
+    .knob::after {
+      content: ''; position: absolute; top: 1.5px; left: 50%;
+      width: 1px; height: 3px; background: var(--gold-dim);
+      transform-origin: bottom center;
+      transform: rotate(-30deg);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .nav-links .hide-mobile { display: none; }
+      .hero { padding-top: 120px; }
+      .terminal { max-width: 100%; }
+      .terminal-body { font-size: 11px; }
+      .install-terminal { font-size: 11px; padding: 16px; }
+      .output-tree { font-size: 11px; padding: 16px; }
+      .feature-card { padding: 24px 20px; }
+    }
+    @media (max-width: 480px) {
+      .hero h1 { font-size: 36px; }
+      .btn { padding: 12px 22px; font-size: 14px; }
+      .diff-table th, .diff-table td { padding: 10px 12px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="fret-bg"></div>
+  <div class="string-line"></div>
+  <div class="string-line"></div>
+  <div class="string-line"></div>
+  <div class="string-line"></div>
+
+  <!-- ═══════════ NAV ═══════════ -->
+  <nav>
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">
+        <span class="logo-guitar"></span>
+        SONGHERO
+      </a>
+      <div class="nav-links">
+        <a href="#how" class="hide-mobile">How It Works</a>
+        <a href="#cli" class="hide-mobile">CLI</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/jackwallner/any-song-clone-hero-cli" target="_blank" class="hide-mobile">GitHub</a>
+        <a href="#install" class="nav-cta">GET STARTED</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ═══════════ HERO ═══════════ -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">
+        <span class="dot"></span> SPOTIFY TO CLONE HERO
+      </div>
+      <h1>
+        PASTE A <span class="gold">SPOTIFY LINK</span>.<br>
+        GET A <span class="red">CLONE HERO</span> CHART.
+      </h1>
+      <p class="sub">
+        Give it a Spotify link. It downloads the audio, pulls synced lyrics, runs audio analysis, and builds a chart with 4 difficulties. Works on single tracks or full playlists.
+      </p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="t-dot r"></span><span class="t-dot y"></span><span class="t-dot g"></span>
+          <span class="title">amplifier — songhero</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">~ $ </span><span class="cmd">songhero</span> <span class="url-clr">https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M</span><br>
+          <div class="out">
+            🎵 Playlist: Today's Top Hits (50 tracks)<br>
+            ⬇ Foo Fighters — New Way Home &nbsp;<span class="flag">--gemini</span> <span class="flag">--lyrics</span> <span class="flag">--video</span><br>
+            &nbsp;&nbsp;&nbsp;Downloading audio + music video...<br>
+            &nbsp;&nbsp;&nbsp;Fetched synced lyrics from LRCLIB...<br>
+            &nbsp;&nbsp;&nbsp;🤖 Gemini enhancing chart patterns & lyrics...<br>
+            &nbsp;&nbsp;&nbsp;✓ Tempo: 172 BPM · Key: E · Sections: 32<br>
+            ✅ Saved to ~/Desktop/Clone Hero/Foo Fighters — New Way Home (SongHero AI)/
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-actions">
+        <a href="#install" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          INSTALL SONGHERO
+        </a>
+        <a href="https://github.com/jackwallner/any-song-clone-hero-cli" target="_blank" class="btn btn-secondary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          STAR ON GITHUB
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ FEATURES ═══════════ -->
+  <section>
+    <div class="container">
+      <div class="knob-row">
+        <div class="knob"></div><div class="knob"></div><div class="knob"></div>
+      </div>
+      <div class="section-label">Features</div>
+      <h2 class="section-title">What it does</h2>
+      <p class="section-desc">No MIDI knowledge required. Paste a Spotify link and get a playable chart.</p>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🎧</div>
+          <h3>Spotify → Chart</h3>
+          <p>Paste a Spotify track or playlist URL. Metadata is pulled from the public page — no API keys, no accounts, no setup.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📋</div>
+          <h3>Playlist Mode</h3>
+          <p>Paste a playlist URL and it'll process every track in sequence. Queue up 50 songs and come back to 50 charts.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🤖</div>
+          <h3>Gemini AI Engine</h3>
+          <p>Uses Gemini 2.0 Flash to identify song sections and build note patterns per difficulty. Also turns plain lyrics into synced karaoke tracks.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🎤</div>
+          <h3>Synced Lyrics</h3>
+          <p>Fetches time-synced LRC lyrics from LRCLIB. Gemini fills in gaps and aligns everything to the song's actual sections.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🎚️</div>
+          <h3>4 Difficulty Levels</h3>
+          <p>Easy through Expert, each with its own note grid. Orange fret and chords introduced progressively as difficulty increases.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📺</div>
+          <h3>Music Video Background</h3>
+          <p>Downloads the official music video from YouTube and bundles it as a background. Works automatically, disable it if you don't want it.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🥁</div>
+          <h3>Beat Detection</h3>
+          <p>librosa extracts onsets, tempo, and pitch from the audio. Notes land on detected beats — nothing's placed at random.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📦</div>
+          <h3>Ready to Play</h3>
+          <p>Outputs a Clone Hero song folder with notes.chart, song.ini, lyrics, album art, and audio. Drop it in your Songs folder and play.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ HOW IT WORKS ═══════════ -->
+  <section id="how">
+    <div class="container">
+      <div class="knob-row">
+        <div class="knob"></div><div class="knob"></div><div class="knob"></div><div class="knob"></div>
+      </div>
+      <div class="section-label">Pipeline</div>
+      <h2 class="section-title">How it works</h2>
+      <p class="section-desc">From a Spotify URL to a playable chart folder.</p>
+      <div class="steps">
+        <div class="step">
+          <span class="step-num">01</span>
+          <h3>Resolve</h3>
+          <p>Reads song title, artist, album, year, and duration from the public Spotify page. For playlists, it grabs every track at once. No auth needed.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">02</span>
+          <h3>Download</h3>
+          <p>Grabs the audio and optional music video from YouTube. Fetches synced lyrics from LRCLIB at the same time.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">03</span>
+          <h3>Analyze</h3>
+          <p>librosa detects beats, onsets, and pitch. Gemini maps out song sections, syncs lyrics, and designs note patterns for each difficulty.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">04</span>
+          <h3>Generate</h3>
+          <p>Writes a .chart file with all 4 difficulties plus lyric tracks, builds the metadata, and packages it into a Clone Hero folder.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ DIFFICULTY TABLE ═══════════ -->
+  <section>
+    <div class="container">
+      <div class="section-label">Difficulties</div>
+      <h2 class="section-title">Easy to Expert</h2>
+      <p class="section-desc">Every chart includes all four. Play whatever feels right.</p>
+      <div class="diff-table-wrap" style="overflow-x:auto;">
+        <table class="diff-table">
+          <thead>
+            <tr>
+              <th>Difficulty</th>
+              <th>Note Density</th>
+              <th>Orange Fret</th>
+              <th>Chords</th>
+              <th>Style</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="diff-name">🥉 EASY</td>
+              <td>25%</td>
+              <td><span class="cross">—</span></td>
+              <td><span class="cross">—</span></td>
+              <td>Simple single notes on strong beats</td>
+            </tr>
+            <tr>
+              <td class="diff-name">🥈 MEDIUM</td>
+              <td>50%</td>
+              <td><span class="cross">—</span></td>
+              <td><span class="cross">—</span></td>
+              <td>Faster single notes, varied patterns</td>
+            </tr>
+            <tr>
+              <td class="diff-name">🥇 HARD</td>
+              <td>70%</td>
+              <td><span class="check">✓</span></td>
+              <td><span class="check">✓</span></td>
+              <td>Orange notes, some chords, faster sections</td>
+            </tr>
+            <tr>
+              <td class="diff-name">🎸 EXPERT</td>
+              <td>90%</td>
+              <td><span class="check">✓</span></td>
+              <td><span class="check">✓</span></td>
+              <td>Dense patterns, full chords, all notes mapped</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ CLI REFERENCE ═══════════ -->
+  <section id="cli">
+    <div class="container">
+      <div class="section-label">CLI</div>
+      <h2 class="section-title">Commands and flags</h2>
+      <p class="section-desc">Run <code>songhero -</code> for interactive mode if you prefer prompts over flags.</p>
+      <div class="diff-table-wrap" style="overflow-x:auto;">
+        <table class="diff-table">
+          <thead>
+            <tr>
+              <th>Command / Flag</th>
+              <th>What it does</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="diff-name"><code style="font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--gold)">songhero &lt;url&gt;</code></td>
+              <td>Chart a single Spotify track</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><code style="font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--gold)">songhero &lt;playlist-url&gt;</code></td>
+              <td>Batch-chart an entire Spotify playlist</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><code style="font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--gold)">songhero -</code></td>
+              <td>Interactive mode — set options, manage keys, queue tracks</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><span class="flag">--lyrics</span> / <span class="flag">--no-lyrics</span></td>
+              <td>Enable or disable synced lyric fetching from LRCLIB</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><span class="flag">--gemini</span> / <span class="flag">--no-gemini</span></td>
+              <td>Enable or disable Gemini AI enhancement of charts and lyrics</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><span class="flag">--video</span> / <span class="flag">--no-video</span></td>
+              <td>Enable or disable music video background download</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><span class="flag">--rewrite</span></td>
+              <td>Overwrite an existing chart folder instead of skipping it</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><span class="flag">--output &lt;dir&gt;</span></td>
+              <td>Set a custom output directory for chart folders</td>
+            </tr>
+            <tr>
+              <td class="diff-name"><span class="flag">--keep-temp</span></td>
+              <td>Keep intermediate files (audio, lyrics, analysis) for debugging</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <div class="grille"></div>
+
+  <!-- ═══════════ INSTALL ═══════════ -->
+  <section id="install" class="install-section">
+    <div class="container">
+      <div class="section-label">Install</div>
+      <h2 class="section-title">Get it running</h2>
+      <p class="section-desc">macOS and Linux. Windows works through WSL.</p>
+      <div class="install-block">
+        <div class="install-tabs">
+          <button class="install-tab active" onclick="switchTab('curl')">curl</button>
+          <button class="install-tab" onclick="switchTab('git')">git</button>
+        </div>
+        <div class="install-terminal" id="tab-curl">
+          <button class="copy-btn" onclick="copyInstall('curl')">COPY</button>
+          <span class="dollar">$</span> <span style="color:#b8933a">curl</span> <span style="color:#4a4239">-sSL</span> <span style="color:#2563eb">https://raw.githubusercontent.com/jackwallner/portfolio/main/docs/songhero/install.sh</span> <span style="color:#4a4239">|</span> <span style="color:#b8933a">bash</span>
+        </div>
+        <div class="install-terminal" id="tab-git" style="display:none">
+          <button class="copy-btn" onclick="copyInstall('git')">COPY</button>
+          <span class="dollar">$</span> <span style="color:#b8933a">git</span> <span style="color:#4a4239">clone</span> <span style="color:#2563eb">https://github.com/jackwallner/any-song-clone-hero-cli.git</span><br>
+          <span class="dollar">$</span> <span style="color:#b8933a">cd</span> <span style="color:#4a4239">any-song-clone-hero-cli &&</span> <span style="color:#b8933a">chmod</span> <span style="color:#4a4239">+x index.js</span>
+        </div>
+        <div class="prereq-note">
+          Prerequisites: <code>brew install yt-dlp ffmpeg</code> · <code>pip3 install librosa soundfile numpy scipy google-generativeai</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ OUTPUT ═══════════ -->
+  <section>
+    <div class="container">
+      <div class="knob-row">
+        <div class="knob"></div><div class="knob"></div><div class="knob"></div>
+      </div>
+      <div class="section-label">Output</div>
+      <h2 class="section-title">What you get</h2>
+      <p class="section-desc">Each song lands in its own Clone Hero folder. Drop it in your Songs directory and rescan.</p>
+      <div class="output-tree">
+        <span class="dir">~/Desktop/Clone Hero/</span><br>
+        <span class="dir">└── Foo Fighters - New Way Home (SongHero AI)/</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── notes.chart</span> &nbsp;<span class="comment">All 4 difficulties + lyric tracks</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── song.ini</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">Metadata (artist, album, length)</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── song.opus</span> &nbsp;&nbsp;&nbsp;<span class="comment">High-quality audio</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── album.jpg</span> &nbsp;&nbsp;&nbsp;<span class="comment">Album cover art</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── lyrics.json</span> &nbsp;<span class="comment">Synced karaoke lyrics</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">└── video.mp4</span> &nbsp;&nbsp;&nbsp;<span class="comment">Music video background</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ CTA ═══════════ -->
+  <section class="cta-section">
+    <div class="container">
+      <h2>Try it out</h2>
+      <p>Paste a link, get a chart. Lyrics, video, four difficulties — done.</p>
+      <div class="hero-actions">
+        <a href="#install" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          INSTALL NOW
+        </a>
+        <a href="https://github.com/jackwallner/any-song-clone-hero-cli" target="_blank" class="btn btn-secondary">STAR ON GITHUB ⭐</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ FOOTER ═══════════ -->
+  <footer>
+    <div class="container">
+      <p>Built by <a href="https://jackwallner.com">Jack Wallner</a> · <a href="https://github.com/jackwallner/any-song-clone-hero-cli">GitHub</a> · MIT License</p>
+    </div>
+  </footer>
+
+  <script>
+    function switchTab(tab) {
+      document.querySelectorAll('.install-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.install-terminal').forEach(t => t.style.display = 'none');
+      document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+      document.getElementById('tab-' + tab).style.display = 'block';
+    }
+
+    function copyInstall(tab) {
+      const lines = {
+        curl: 'curl -sSL https://raw.githubusercontent.com/jackwallner/portfolio/main/docs/songhero/install.sh | bash',
+        git: 'git clone https://github.com/jackwallner/any-song-clone-hero-cli.git && cd any-song-clone-hero-cli && chmod +x index.js'
+      };
+      navigator.clipboard.writeText(lines[tab]).then(() => {
+        const btn = document.querySelector(`#tab-${tab} .copy-btn`);
+        const orig = btn.textContent;
+        btn.textContent = 'COPIED!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+      });
+    }
+  </script>
+</body>
+</html>

@@ -9,6 +9,14 @@
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": ["clone-hero", "chart", "spotify", "guitar-hero"],
-  "license": "MIT"
+  "keywords": [
+    "clone-hero",
+    "chart",
+    "spotify",
+    "guitar-hero"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
 }

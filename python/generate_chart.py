@@ -55,11 +55,21 @@ def generate_chart(analysis_data, metadata):
         tick = sec["tick"]
         events.append((tick, f'E "section {name}"'))
     
-    # Add lyrics events
-    for lyric in analysis_data.get("lyrics", []):
-        tick = lyric["tick"]
-        word = lyric["word"]
-        events.append((tick, f'E "lyric {word}"'))
+    # Lyrics as E "lyric <text>" + E "phrase_start" events
+    lyrics = analysis_data.get("lyrics", [])
+    if lyrics:
+        prev_tick = None
+        for i, lyric in enumerate(lyrics):
+            tick = lyric["tick"]
+            word = lyric["word"].replace('"', "'")
+            # Check for phrase boundary (gap > 1 beat at current tempo)
+            bpm = tempo_map[0]["bpm"] / 1000.0
+            beat_ticks = 480 * 4  # 480 resolution, 4 ticks per beat = 1920
+            is_new_phrase = prev_tick is None or (tick - prev_tick) > int(beat_ticks * 1.5)
+            if is_new_phrase:
+                events.append((tick, 'E "phrase_start"'))
+            events.append((tick, f'E "lyric {word}"'))
+            prev_tick = tick
     
     # Sort by tick
     events.sort(key=lambda x: x[0])
@@ -69,6 +79,26 @@ def generate_chart(analysis_data, metadata):
     for tick, event_str in events:
         lines.append(f"  {tick} = {event_str}")
     lines.append("}")
+    
+    # [PART VOCALS] - Lyrics track for Clone Hero display
+    lyrics = analysis_data.get("lyrics", [])
+    if lyrics:
+        lines.append("")
+        lines.append("[PART VOCALS]")
+        lines.append("{")
+        prev_tick = None
+        for i, lyric in enumerate(lyrics):
+            tick = lyric["tick"]
+            word = lyric["word"].replace('"', "'")
+            # Vocal note: N 0 <length> (type 0 = talky/non-pitched)
+            # Use a length that spans to the next lyric or 480 ticks
+            length = 480
+            if i + 1 < len(lyrics):
+                next_tick = lyrics[i + 1]["tick"]
+                length = max(120, next_tick - tick)
+            lines.append(f"  {tick} = N 0 {length}")
+            lines.append(f"  {tick} = E \"{word}\"")
+        lines.append("}")
     
     # Note tracks - Expert, Hard, Medium, Easy
     difficulties = analysis_data.get("difficulties", {})

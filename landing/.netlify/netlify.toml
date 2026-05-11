@@ -1,0 +1,44 @@
+headersOrigin = "config"
+redirectsOrigin = "config"
+plugins = []
+
+[functions]
+
+[functions."*"]
+
+[build]
+publish = "/Users/jackwallner/Songhero/landing"
+publishOrigin = "config"
+base = "/Users/jackwallner/Songhero/landing"
+
+[build.environment]
+
+[build.processing]
+
+[build.processing.css]
+
+[build.processing.html]
+
+[build.processing.images]
+
+[build.processing.js]
+
+[build.services]
+
+[[headers]]
+for = "/*"
+
+[headers.values]
+Cache-Control = "public, max-age=3600"
+
+[[redirects]]
+from = "/install.sh"
+to = "/install.sh"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
