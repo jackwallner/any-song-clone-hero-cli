@@ -392,3 +392,176 @@ If the full plan must be staged, implement this minimum safe slice first:
 
 This sequence puts security and silent data corruption ahead of cosmetic or
 larger AI improvements while preserving a usable non-AI path at every step.
+
+## Review addendum
+
+This addendum records follow-up requirements from review. The original findings
+and implementation phases remain unchanged.
+
+### Contract decisions to make explicit
+
+Record the complete option contract in one table before implementation:
+
+| Mode | CLI mapping | Video request | Failure behavior |
+| --- | --- | --- | --- |
+| `off` | default, `--no-video` | Never | Continue with audio-only output |
+| `auto` | Interactive `video auto` only, unless explicitly exposed as a flag | Best compatible candidate | Warn and continue when video is unavailable |
+| `force` | `--video`, interactive `video on` or `video force` | Required | Fail the track if a compatible video cannot be packaged |
+
+Reject conflicting `--video` and `--no-video` options. Define whether `force`
+means only that video is required or also bypasses the non-music-video title
+filter. Make command mode and legacy mode accept the same options, including
+`--output`, `--rate-limit`, `--keep-temp`, and Gemini and lyrics toggles.
+
+Define the following behaviors in the same contract:
+
+1. Gemini with no key, an explicit `--gemini` with no key, and a failed model
+   request.
+2. Empty playlists, invalid tracks, duplicate tracks, skipped tracks, and
+   best-effort playlist exit codes.
+3. Whether an existing but invalid or partially written folder is skipped,
+   repaired, or rejected.
+4. The exact output manifest, including whether `lyrics.json`, analysis data,
+   source URLs, and a SongHero ownership marker are public package files.
+
+### Missing implementation work
+
+Add concrete implementation items for findings that currently have tests or
+recommendations but no code task:
+
+1. Refactor the Spotify and playlist adapters to strictly parse accepted hosts,
+   schemes, and 22-character track or playlist IDs. Use an HTML parser or an
+   explicit entity decoder, handle attributes in either order, check status and
+   content type, cap response bytes, and test redirects and malformed pages.
+2. Apply response-size limits to lyrics and Gemini responses as well as Spotify
+   pages. Bound `yt-dlp` stdout and stderr and terminate the child when a limit
+   or timeout is reached.
+3. Make browser cookie use opt-in with a named browser argument. Do not scan
+   browser profiles by default. Store API keys with mode `0600`, prompt for a
+   key without echo when practical, and never accept secrets as positional
+   command-line arguments in documented workflows.
+4. Pin the installer to a reviewed repository ref and define an integrity check
+   for the downloaded installer or repository contents. Do not make a remote
+   installer silently edit shell startup files or install a package manager.
+5. If the installer creates a Python virtual environment, pass its interpreter
+   path into the Node pipeline. Do not leave the runtime hard-coded to a
+   potentially different system `python3`. Lock production Python dependency
+   versions, not only broad version ranges.
+6. Add dependency-injection seams for the process runner, metadata resolver,
+   downloader, lyrics source, clock, and AI client. The offline integration
+   tests should use those seams instead of relying on undocumented executable
+   replacement or network interception.
+
+### Reproducibility boundary
+
+Define "same input" as a content-addressed input set, not merely a Spotify URL.
+Record or cache the normalized Spotify metadata, selected media URL, downloaded
+audio hash, lyrics response or source hash, generator version, configuration,
+dependency lock, random seed, model name, and AI response hash. A live run may
+change when external sources change, so document that limitation separately
+from the deterministic offline guarantee.
+
+The final manifest should expose enough non-secret provenance to reproduce or
+diagnose a chart without storing API keys, browser cookies, or unnecessary full
+prompts.
+
+### Timeline verification requirements
+
+The timeline definition of done must prove audio alignment, not only internal
+consistency. Add deterministic fixtures for:
+
+1. A constant-tempo click track.
+2. A click track with a known tempo change.
+3. Initial silence and a measured music onset.
+4. Silence, zero-duration, very short, and decode-error inputs.
+
+Assert expected click-to-note timing after `.chart` serialization. Use explicit
+initial targets such as no more than one quantization tick for converter
+round-trips and no more than 20 ms error on synthetic click-track events, then
+adjust only with documented evidence. Test sustain ends as well as note starts.
+
+The tempo-map implementation must specify how beat observations become chart
+ticks, how tempo changes are placed at integer ticks, how rounding is handled,
+and how Clone Hero interprets the resulting `SyncTrack`. A compact map and a
+byte-identical wrong map are not sufficient acceptance criteria.
+
+### Output safety and migration
+
+Create the package staging directory under the selected output root so the
+final rename cannot cross filesystems. Preserve the previous valid package
+until a rewrite has fully validated the replacement, and provide rollback
+behavior if the final rename fails.
+
+Use an ownership marker or manifest before deleting an existing directory.
+Never treat path containment alone as proof that an arbitrary existing folder
+is safe to remove. Resolve and reject symlinked output roots or destinations
+unless their behavior is explicitly supported.
+
+Because the proposed ID-based slug changes the current folder layout, define a
+migration policy for existing artist/title folders. Include tests for path
+collisions, Unicode, empty names, reserved names, separators, symlinks, and
+folders that are not SongHero-owned.
+
+### AI schema correction
+
+Choose one explicit schema for each AI-controlled value. If both fields are
+needed, document and validate them separately:
+
+- `fret_emphasis`: exactly five finite nonnegative numbers with a positive sum,
+  normalized by the application.
+- `fret_mapping`: an optional object mapping pitch classes `0` through `11` to
+  integer frets `0` through `4`.
+- `sections`: only integer section keys in range, supported labels and styles,
+  finite integer energy from 1 through 10, and `identical_to` as a valid,
+  non-self section index or null.
+
+Delimit song metadata as untrusted context in the prompt. Add fixtures for
+missing fields, extra fields, non-finite numbers, zero and negative weights,
+integer-versus-string references, self-references, out-of-range references,
+and prompt-injection-looking titles.
+
+### Test and release corrections
+
+Add automated tests for process timeout and spawn errors, SIGINT cleanup,
+output-root and symlink guards, invalid existing packages, response-size
+limits, secret redaction, option parity, and shell-metacharacter metadata.
+Make the chart validator check the exact selected line-ending policy, including
+the final newline, nondecreasing rather than strictly increasing event ticks,
+tempo event uniqueness at tick zero, sustain ends, chart metadata escaping,
+and the relationship between `song.ini`, `.chart`, and media files.
+
+Replace the release commands with executable commands. Add a documented
+`doctor` command, invoked as `songhero -- doctor`, or remove it from the
+checklist. Use `node index.js` or an installed package consistently. Run one
+Node syntax check per file, for example:
+
+```bash
+node --check index.js
+for file in lib/*.js; do node --check "$file"; done
+python -m py_compile python/*.py
+npm test
+songhero -- doctor
+```
+
+Do not pass placeholders such as `<fixture-playlist>` to the production CLI
+unless local fixtures are a supported input type. Use a named offline smoke
+test command with injected fake adapters instead.
+
+The final release gate must explicitly include every unresolved P0 and P1
+area: metadata bounds and TLS, secret and cookie handling, dependency
+preflight, media integrity, playlist aggregation, audio edge cases, chart
+serialization, atomic rewrite behavior, reproducibility, and an actual Clone
+Hero compatibility scan. Documentation synchronization alone is not evidence
+that those gates passed.
+
+### Evidence corrections
+
+Update the evidence section to distinguish these facts:
+
+1. `node --check index.js lib/*.js` does not reliably prove that every
+   expanded file was parsed. Check each file separately.
+2. The current chart writer conditionally omits empty difficulty tracks.
+3. The current generated sample has a trailing LF after its CRLF content,
+   because the CLI uses `print()` around chart text that already contains CRLF.
+4. `songhero --doctor` is currently interpreted as a track URL and is not a
+   diagnostic command until implemented.
