@@ -14,7 +14,7 @@ songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
    - Beat & onset detection
    - Pitch-to-fret mapping
    - Section detection (verse, chorus, bridge)
-4. **Generate** — Creates `.chart` files with 4 difficulty levels
+4. **Generate** — Creates `.chart` files with 4 difficulty levels for guitar **and** bass
 5. **Package** — Outputs a complete Clone Hero song folder
 
 ## Difficulty Levels
@@ -25,6 +25,10 @@ songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
 | **Medium** | 50% | No | No | Faster, more notes, no orange |
 | **Hard** | 70% | Yes | Yes | Orange notes, some chords |
 | **Expert** | 90% | Yes | Yes | Dense, all notes, complex patterns |
+
+Every song also gets a **bass track** (4 difficulties, frets 0-3). Bass notes
+follow the low-frequency onsets detected in the audio: single notes on the low
+frets, long sustains, and occasional octave double-stops on Hard/Expert.
 
 ## Installation
 
@@ -94,7 +98,7 @@ Each song is saved as a Clone Hero-ready folder:
 ```
 ~/Desktop/Clone Hero/
 └── Artist - Song Name (SongHero AI)/
-    ├── notes.chart    # All 4 difficulties
+    ├── notes.chart    # Guitar + bass, 4 difficulties each
     ├── song.ini       # Song metadata
     ├── song.opus      # High-quality audio
     ├── album.jpg      # Album artwork

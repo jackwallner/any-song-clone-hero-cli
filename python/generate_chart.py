@@ -100,9 +100,10 @@ def generate_chart(analysis_data, metadata):
             lines.append(f"  {tick} = E \"{word}\"")
         lines.append("}")
     
-    # Note tracks - Expert, Hard, Medium, Easy
+    # Note tracks - Expert, Hard, Medium, Easy (guitar + bass)
     difficulties = analysis_data.get("difficulties", {})
-    diff_order = ["ExpertSingle", "HardSingle", "MediumSingle", "EasySingle"]
+    diff_order = ["ExpertSingle", "HardSingle", "MediumSingle", "EasySingle",
+                  "ExpertDoubleBass", "HardDoubleBass", "MediumDoubleBass", "EasyDoubleBass"]
     
     for diff_name in diff_order:
         notes = difficulties.get(diff_name, [])
