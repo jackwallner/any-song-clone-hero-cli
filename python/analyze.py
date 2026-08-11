@@ -12,6 +12,13 @@ from scipy.signal import find_peaks
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 RESOLUTION = 480  # ticks per beat
 
+def to_float(x):
+    """Coerce a librosa scalar-or-array result to a Python float.
+    librosa >= 0.10 returns tempo as a numpy array, and numpy >= 2 refuses
+    float() on any array with ndim > 0."""
+    arr = np.asarray(x, dtype=float).ravel()
+    return float(arr[0]) if arr.size else 0.0
+
 def time_to_tick(t, tempo, offset=0):
     """Convert time in seconds to chart ticks at current tempo."""
     return int(round((t - offset) * RESOLUTION * tempo / 60.0))
@@ -98,7 +105,7 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
     else:
         print("Detecting beats...", file=sys.stderr)
         tempo, beat_frames = librosa.beat.beat_track(y=y_perc, sr=sr, units='frames')
-        tempo = float(tempo)
+        tempo = to_float(tempo)
         beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     
     # Onset detection
@@ -149,7 +156,7 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
             new_tail = [t for t in tail_times if t > existing_last + 0.1]
             if new_tail:
                 beat_times = np.concatenate([beat_times, new_tail])
-                print(f"  ↳ Re-tracked tail: {float(tail_tempo):.0f} BPM, {len(new_tail)} beats recovered ({new_tail[0]:.1f}s → {new_tail[-1]:.1f}s)", file=sys.stderr)
+                print(f"  ↳ Re-tracked tail: {to_float(tail_tempo):.0f} BPM, {len(new_tail)} beats recovered ({new_tail[0]:.1f}s → {new_tail[-1]:.1f}s)", file=sys.stderr)
         
         beat_coverage = beat_times[-1] / duration
     
