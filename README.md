@@ -101,6 +101,24 @@ Each song is saved as a Clone Hero-ready folder:
     └── video.mp4      # Music video (if available)
 ```
 
+Clone Hero picks the background video up automatically from the `video.mp4`
+filename. There is no `video = ` key in `song.ini`; the only video setting is
+the optional `video_start_time`.
+
+### Background video codec
+
+Clone Hero only decodes **H.264** video. YouTube now serves most 1080p mp4
+streams as AV1, which Clone Hero loads as a black screen. SongHero prefers an
+H.264 stream and re-encodes with ffmpeg when only AV1/VP9 is available.
+
+Charts made with an older SongHero build can be repaired in place:
+
+```bash
+node scripts/fix-videos.js --dry-run     # list videos that need re-encoding
+node scripts/fix-videos.js               # re-encode them to H.264
+node scripts/fix-videos.js "/path/to/Clone Hero"
+```
+
 ## Tech Stack
 
 - **CLI**: Node.js

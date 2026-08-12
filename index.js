@@ -197,7 +197,8 @@ async function runPipeline(spotifyUrl, options = {}) {
   
   let downloadInfo;
   try {
-    downloadInfo = await downloadSong(metadata.artist, metadata.name, workDir);
+    const videoMode = noVideo ? 'off' : (forceVideo ? 'on' : 'auto');
+    downloadInfo = await downloadSong(metadata.artist, metadata.name, workDir, videoMode);
     console.log(`  ✓ Audio downloaded`);
     if (downloadInfo.hasVideo) {
       console.log(`  ✓ Music video downloaded`);
@@ -322,13 +323,8 @@ async function runPipeline(spotifyUrl, options = {}) {
   fs.mkdirSync(outputPath, { recursive: true });
   
   const filesToCopy = ['notes.chart', 'song.ini', audioFile];
-  if (hasVideo) {
-    const videoFile = fs.readdirSync(workDir).find(f => f.startsWith('video.'));
-    if (videoFile) {
-      filesToCopy.push(videoFile);
-      const videoExt = path.extname(videoFile);
-      fs.copyFileSync(path.join(workDir, videoFile), path.join(workDir, `video${videoExt}`));
-    }
+  if (hasVideo && fs.existsSync(path.join(workDir, 'video.mp4'))) {
+    filesToCopy.push('video.mp4');
   }
   if (fs.existsSync(path.join(workDir, 'album.jpg'))) {
     filesToCopy.push('album.jpg');
