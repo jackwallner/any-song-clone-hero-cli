@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Scrape track listing from a Spotify playlist embed page.
 Extracts the entity JSON blob from the Next.js __NEXT_DATA__ script."""
-import sys, json, re, ssl, urllib.request
-
-ssl._create_default_https_context = ssl._create_unverified_context
+import sys, json, re, urllib.request
 
 
 def find_tracklist(obj):

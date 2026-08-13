@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Scrape track metadata from the public Spotify track page meta tags.
 No API keys required — parses og: and music: meta tags from the HTML."""
-import sys, json, re, ssl, urllib.request
-
-ssl._create_default_https_context = ssl._create_unverified_context
+import sys, json, re, urllib.request
 
 
 def resolve_spotify(url):

@@ -2,7 +2,7 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
-const { spawn, execSync } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const readline = require('readline');
@@ -169,7 +169,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   console.log('Step 1/5: Resolving Spotify link...');
   let metadata;
   try {
-    const result = execSync(`python3 "${path.join(__dirname, 'python', 'spotify.py')}" "${spotifyUrl}"`, {
+    const result = execFileSync('python3', [path.join(__dirname, 'python', 'spotify.py'), spotifyUrl], {
       encoding: 'utf-8',
       timeout: 30000
     });
@@ -214,8 +214,9 @@ async function runPipeline(spotifyUrl, options = {}) {
   if (fetchLyrics) {
     console.log('\nStep 2.5/5: Fetching lyrics...');
     try {
-      const lyricsResult = execSync(
-        `python3 "${path.join(__dirname, 'python', 'lyrics.py')}" "${metadata.name}" "${metadata.artist}"`,
+      const lyricsResult = execFileSync(
+        'python3',
+        [path.join(__dirname, 'python', 'lyrics.py'), metadata.name, metadata.artist],
         { encoding: 'utf-8', timeout: 30000 }
       );
       lyricsData = JSON.parse(lyricsResult);
@@ -244,9 +245,10 @@ async function runPipeline(spotifyUrl, options = {}) {
   const audioPath = path.join(workDir, audioFile);
   let analysis;
   try {
-    const geminiFlag = useGemini ? '--gemini' : '';
-    const lyricsFlag = (fetchLyrics && lyricsData) ? `--lyrics-file "${path.join(workDir, 'lyrics.json')}"` : '';
-    const result = execSync(`python3 "${path.join(__dirname, 'python', 'analyze.py')}" "${audioPath}" ${geminiFlag} ${lyricsFlag}`, {
+    const analyzeArgs = [path.join(__dirname, 'python', 'analyze.py'), audioPath];
+    if (useGemini) analyzeArgs.push('--gemini');
+    if (fetchLyrics && lyricsData) analyzeArgs.push('--lyrics-file', path.join(workDir, 'lyrics.json'));
+    const result = execFileSync('python3', analyzeArgs, {
       encoding: 'utf-8',
       timeout: 120000,
       maxBuffer: 50 * 1024 * 1024,
@@ -299,7 +301,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   fs.writeFileSync(metadataJson, JSON.stringify(fullMetadata));
   
   try {
-    const chart = execSync(`python3 "${path.join(__dirname, 'python', 'generate_chart.py')}" "${analysisJson}" "${metadataJson}"`, {
+    const chart = execFileSync('python3', [path.join(__dirname, 'python', 'generate_chart.py'), analysisJson, metadataJson], {
       encoding: 'utf-8',
       timeout: 10000
     });
@@ -359,8 +361,9 @@ async function processPlaylist(playlistUrl, options = {}) {
 
   let playlistData;
   try {
-    const result = execSync(
-      `python3 "${path.join(__dirname, 'python', 'playlist.py')}" "${playlistUrl}"`,
+    const result = execFileSync(
+      'python3',
+      [path.join(__dirname, 'python', 'playlist.py'), playlistUrl],
       { encoding: 'utf-8', timeout: 30000 }
     );
     playlistData = JSON.parse(result);
