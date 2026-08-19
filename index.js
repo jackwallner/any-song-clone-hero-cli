@@ -2,7 +2,7 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const readline = require('readline');
@@ -12,6 +12,25 @@ const { generateSongIni } = require('./lib/songini');
 const CLONE_HERO_DIR = path.join(require('os').homedir(), 'Desktop', 'Clone Hero');
 const OUTPUT_DIR = path.join(__dirname, 'output');
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+
+// Windows Python installs expose `python`, not `python3`, so probe for a real
+// Python 3 instead of hardcoding one name.
+function resolvePython() {
+  const candidates = process.platform === 'win32'
+    ? ['python', 'python3', 'py']
+    : ['python3', 'python'];
+  for (const candidate of candidates) {
+    const res = spawnSync(candidate, ['-c', 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)'], {
+      stdio: 'ignore',
+    });
+    if (!res.error && res.status === 0) {
+      return candidate;
+    }
+  }
+  return candidates[0];
+}
+
+const PYTHON = resolvePython();
 
 function showBanner() {
   console.log('🎸 SongHero - AI-Powered Clone Hero Chart Generator');
@@ -169,7 +188,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   console.log('Step 1/5: Resolving Spotify link...');
   let metadata;
   try {
-    const result = execSync(`python3 "${path.join(__dirname, 'python', 'spotify.py')}" "${spotifyUrl}"`, {
+    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'spotify.py')}" "${spotifyUrl}"`, {
       encoding: 'utf-8',
       timeout: 30000
     });
@@ -215,7 +234,7 @@ async function runPipeline(spotifyUrl, options = {}) {
     console.log('\nStep 2.5/5: Fetching lyrics...');
     try {
       const lyricsResult = execSync(
-        `python3 "${path.join(__dirname, 'python', 'lyrics.py')}" "${metadata.name}" "${metadata.artist}"`,
+        `"${PYTHON}" "${path.join(__dirname, 'python', 'lyrics.py')}" "${metadata.name}" "${metadata.artist}"`,
         { encoding: 'utf-8', timeout: 30000 }
       );
       lyricsData = JSON.parse(lyricsResult);
@@ -246,7 +265,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   try {
     const geminiFlag = useGemini ? '--gemini' : '';
     const lyricsFlag = (fetchLyrics && lyricsData) ? `--lyrics-file "${path.join(workDir, 'lyrics.json')}"` : '';
-    const result = execSync(`python3 "${path.join(__dirname, 'python', 'analyze.py')}" "${audioPath}" ${geminiFlag} ${lyricsFlag}`, {
+    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'analyze.py')}" "${audioPath}" ${geminiFlag} ${lyricsFlag}`, {
       encoding: 'utf-8',
       timeout: 120000,
       maxBuffer: 50 * 1024 * 1024,
@@ -299,7 +318,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   fs.writeFileSync(metadataJson, JSON.stringify(fullMetadata));
   
   try {
-    const chart = execSync(`python3 "${path.join(__dirname, 'python', 'generate_chart.py')}" "${analysisJson}" "${metadataJson}"`, {
+    const chart = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'generate_chart.py')}" "${analysisJson}" "${metadataJson}"`, {
       encoding: 'utf-8',
       timeout: 10000
     });
@@ -360,7 +379,7 @@ async function processPlaylist(playlistUrl, options = {}) {
   let playlistData;
   try {
     const result = execSync(
-      `python3 "${path.join(__dirname, 'python', 'playlist.py')}" "${playlistUrl}"`,
+      `"${PYTHON}" "${path.join(__dirname, 'python', 'playlist.py')}" "${playlistUrl}"`,
       { encoding: 'utf-8', timeout: 30000 }
     );
     playlistData = JSON.parse(result);

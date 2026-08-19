@@ -28,11 +28,17 @@ songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
 
 ## Installation
 
+Supported platforms: **macOS** and **Linux**. On Windows, run SongHero inside
+WSL (see [Windows](#windows) below). Node.js 18+ and Python 3 are required.
+
 ### Prerequisites
 
 ```bash
 # macOS
 brew install yt-dlp ffmpeg
+
+# Debian / Ubuntu (including WSL)
+sudo apt install -y python3-pip ffmpeg && pip3 install yt-dlp
 
 # Python dependencies
 pip3 install librosa soundfile numpy scipy
@@ -45,6 +51,26 @@ git clone https://github.com/jackwallner/any-song-clone-hero-cli.git
 cd any-song-clone-hero-cli
 chmod +x index.js
 ```
+
+### Windows
+
+SongHero is not a Windows-native program, and double-clicking `index.js` in
+Explorer will not work: Windows hands `.js` files to Windows Script Host, which
+chokes on the shebang and reports `Invalid character` at line 1, char 1. Use WSL
+instead, which gives you a real Linux environment inside Windows.
+
+1. In PowerShell as Administrator, run `wsl --install`
+2. Reboot, open the **Ubuntu** app, and set a username and password
+3. In the Ubuntu shell, run the installer:
+
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/jackwallner/portfolio/main/docs/songhero/install.sh | bash
+   ```
+
+4. Reopen Ubuntu, then run `songhero <spotify_url>`
+
+Charts land in your Linux home directory. Reach them from Windows Explorer by
+typing `\\wsl$` in the address bar.
 
 ### Optional: Gemini AI Enhancement
 
