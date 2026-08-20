@@ -10,8 +10,8 @@ def resolve_spotify(url):
     track_id = None
     patterns = [
         r"spotify:track:(\w+)",
-        r"open\.spotify\.com/track/(\w+)",
-        r"play\.spotify\.com/track/(\w+)",
+        r"open\.spotify\.com/(?:intl-[a-z]{2,}/)?track/(\w+)",
+        r"play\.spotify\.com/(?:intl-[a-z]{2,}/)?track/(\w+)",
     ]
     for pat in patterns:
         m = re.search(pat, url)
