@@ -221,6 +221,22 @@ else
 fi
 chmod +x "$INSTALL_DIR/index.js"
 
+# An install first cloned by Windows git carries CRLF endings, which makes the
+# kernel read the shebang argument as "node\r" and fail with a misleading
+# `env: 'node': No such file or directory`. .gitattributes prevents this on new
+# clones; strip it here so existing installs are repaired by a rerun too.
+if head -1 "$INSTALL_DIR/index.js" | grep -q $'\r'; then
+  warn "Windows line endings detected. Normalising..."
+  find "$INSTALL_DIR" -path "$INSTALL_DIR/node_modules" -prune -o \
+       -path "$INSTALL_DIR/venv" -prune -o \
+       -type f \( -name '*.js' -o -name '*.py' -o -name '*.sh' \) -print |
+    while read -r f; do
+      sed -i.bak 's/\r$//' "$f" && rm -f "$f.bak"
+    done
+  git -C "$INSTALL_DIR" config core.autocrlf false 2>/dev/null || true
+  ok "Line endings normalised"
+fi
+
 info "Installing Node dependencies..."
 ( cd "$INSTALL_DIR" && npm install --omit=dev --silent ) && ok "Node dependencies installed" \
   || die "npm install failed. Rerun: cd $INSTALL_DIR && npm install"

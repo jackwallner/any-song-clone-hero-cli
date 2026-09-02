@@ -166,6 +166,53 @@ node scripts/fix-videos.js               # re-encode them to H.264
 node scripts/fix-videos.js "/path/to/Clone Hero"
 ```
 
+## Troubleshooting
+
+### `env: 'node': No such file or directory`
+
+Two different problems print this, and the second line of the error tells them
+apart.
+
+**If that is the only line**, Node.js is not installed in the environment you
+are running from. A fresh WSL Ubuntu has no Node. Rerun the installer:
+
+```bash
+curl -sSL https://jackwallner.com/songhero/install.sh | bash
+```
+
+**If it is followed by** `env: use -[v]S to pass options in shebang lines`,
+Node is beside the point: your copy of `index.js` has Windows (CRLF) line
+endings. The shebang then reads as `node\r` rather than `node`, and no
+installed Node will ever match it. This happens when the repository is cloned
+by Windows git, which rewrites line endings on checkout, and then run from WSL.
+
+Confirm it:
+
+```bash
+head -1 index.js | od -c | head -2      # a trailing \r means CRLF
+```
+
+Fix your existing copy:
+
+```bash
+sed -i 's/\r$//' index.js lib/*.js python/*.py
+```
+
+Or reinstall, which repairs line endings automatically:
+
+```bash
+curl -sSL https://jackwallner.com/songhero/install.sh | bash
+```
+
+Clone inside WSL rather than in Windows to avoid it entirely. Charts land in
+your Linux home directory; reach them from Explorer by typing `\\wsl$` in the
+address bar.
+
+### `Cannot find module 'dotenv'`
+
+The Node dependencies were never installed. Run `npm install` in the install
+directory (`~/.songhero` for installer-based installs).
+
 ## Tech Stack
 
 - **CLI**: Node.js

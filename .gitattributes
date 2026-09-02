@@ -1,0 +1,20 @@
+# Windows clones default to core.autocrlf=true, which rewrites index.js with
+# CRLF endings. The kernel then reads the shebang argument as "node\r", and the
+# only symptom is a pair of errors that look like a missing Node install:
+#
+#   env: 'node': No such file or directory
+#   env: use -[v]S to pass options in shebang lines
+#
+# Force LF so a checkout on any platform stays executable under WSL and Linux.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.webm binary
+*.mkv binary
+*.opus binary
+*.mp3 binary
