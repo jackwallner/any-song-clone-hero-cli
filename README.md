@@ -33,22 +33,39 @@ WSL (see [Windows](#windows) below). Node.js 18+ and Python 3 are required.
 
 ### Prerequisites
 
+The installer below sets all of this up for you. To do it by hand:
+
 ```bash
 # macOS
-brew install yt-dlp ffmpeg
+brew install node python yt-dlp ffmpeg
 
 # Debian / Ubuntu (including WSL)
-sudo apt install -y python3-pip ffmpeg && pip3 install yt-dlp
+sudo apt install -y nodejs npm python3 python3-venv ffmpeg
+node -v   # must be 18 or newer; if not, install Node 20 from https://deb.nodesource.com
+curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp
+chmod +x ~/.local/bin/yt-dlp
 
-# Python dependencies
-pip3 install librosa soundfile numpy scipy
+# Python dependencies (Debian and Ubuntu refuse a plain pip install into the
+# system Python, so use a venv)
+python3 -m venv ~/.songhero/venv
+~/.songhero/venv/bin/pip install librosa soundfile numpy scipy
 ```
 
 ### Install SongHero
 
+The one-line installer works on macOS, Linux, and WSL. It installs Node, Python,
+ffmpeg, and yt-dlp, then verifies every dependency before it reports success:
+
+```bash
+curl -sSL https://jackwallner.com/songhero/install.sh | bash
+```
+
+To install from source instead:
+
 ```bash
 git clone https://github.com/jackwallner/any-song-clone-hero-cli.git
 cd any-song-clone-hero-cli
+npm install
 chmod +x index.js
 ```
 
@@ -64,10 +81,14 @@ instead, which gives you a real Linux environment inside Windows.
 3. In the Ubuntu shell, run the installer:
 
    ```bash
-   curl -sSL https://raw.githubusercontent.com/jackwallner/portfolio/main/docs/songhero/install.sh | bash
+   curl -sSL https://jackwallner.com/songhero/install.sh | bash
    ```
 
 4. Reopen Ubuntu, then run `songhero <spotify_url>`
+
+A fresh WSL Ubuntu has no Node.js, so the installer adds it. If you see
+`env: 'node': No such file or directory`, you are on a build from before the
+installer did that: rerun the command above and it will repair the install.
 
 Charts land in your Linux home directory. Reach them from Windows Explorer by
 typing `\\wsl$` in the address bar.

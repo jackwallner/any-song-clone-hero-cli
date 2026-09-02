@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+// dotenv is optional: a missing node_modules should not stop the CLI, it just
+// means .env is not read.
+try {
+  require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+} catch (err) {
+  if (err.code !== 'MODULE_NOT_FOUND') throw err;
+}
 
 const { spawn, spawnSync, execSync } = require('child_process');
 const path = require('path');
@@ -14,20 +20,52 @@ const OUTPUT_DIR = path.join(__dirname, 'output');
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 
 // Windows Python installs expose `python`, not `python3`, so probe for a real
-// Python 3 instead of hardcoding one name.
+// Python 3 instead of hardcoding one name. The installer puts the analysis
+// dependencies in a venv (Debian and Ubuntu refuse a plain pip install into the
+// system Python), so prefer that interpreter when it exists.
+function pythonCandidates() {
+  const win = process.platform === 'win32';
+  const candidates = [];
+  if (process.env.SONGHERO_PYTHON) {
+    candidates.push(process.env.SONGHERO_PYTHON);
+  }
+  const venv = path.join(
+    require('os').homedir(),
+    '.songhero',
+    'venv',
+    win ? 'Scripts' : 'bin',
+    win ? 'python.exe' : 'python'
+  );
+  if (fs.existsSync(venv)) {
+    candidates.push(venv);
+  }
+  candidates.push(...(win ? ['python', 'python3', 'py'] : ['python3', 'python']));
+  return candidates;
+}
+
 function resolvePython() {
-  const candidates = process.platform === 'win32'
-    ? ['python', 'python3', 'py']
-    : ['python3', 'python'];
+  const candidates = pythonCandidates();
+  const usable = [];
   for (const candidate of candidates) {
     const res = spawnSync(candidate, ['-c', 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)'], {
       stdio: 'ignore',
     });
     if (!res.error && res.status === 0) {
+      usable.push(candidate);
+    }
+  }
+  // find_spec instead of a real import: librosa takes seconds to load.
+  for (const candidate of usable) {
+    const res = spawnSync(
+      candidate,
+      ['-c', 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("librosa") else 1)'],
+      { stdio: 'ignore' }
+    );
+    if (!res.error && res.status === 0) {
       return candidate;
     }
   }
-  return candidates[0];
+  return usable[0] || candidates[candidates.length - 1];
 }
 
 const PYTHON = resolvePython();
