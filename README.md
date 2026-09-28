@@ -10,7 +10,7 @@ songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
 
 1. **Resolve** — Extracts song metadata from Spotify (no API key needed)
 2. **Download** — Fetches audio + music video from YouTube via yt-dlp
-3. **Analyze** — AI-powered audio analysis using librosa + Gemini
+3. **Analyze** — AI-powered audio analysis using librosa + Gemini, Claude or Codex
    - Beat & onset detection
    - Pitch-to-fret mapping
    - Section detection (verse, chorus, bridge)
@@ -101,6 +101,37 @@ export GEMINI_API_KEY="your-key-here"
 cp .env.example .env
 ```
 
+### Optional: Claude or Codex instead of Gemini (no API key)
+
+If you have [Claude Code](https://claude.com/claude-code) or the
+[Codex CLI](https://github.com/openai/codex) installed and logged in, SongHero can
+send the section analysis through that CLI instead of the Gemini API. It then
+runs on your Claude or ChatGPT subscription, and no API key is needed.
+
+```bash
+songhero <spotify_url> --ai claude
+songhero <spotify_url> --ai codex
+
+# Or make it the default
+export SONGHERO_AI=claude
+```
+
+The call runs in an empty temp directory with tools disabled (Claude) or a
+read-only sandbox (Codex). `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` are stripped
+from its environment so the login is used rather than a key. Expect about
+5–15 seconds per song instead of about 1 second with Gemini, and each song uses
+some of your subscription quota.
+
+| Variable | Effect |
+|----------|--------|
+| `SONGHERO_AI` | Default provider: `gemini`, `claude` or `codex` |
+| `SONGHERO_CLAUDE_MODEL` | Model passed to `claude --model` |
+| `SONGHERO_CLAUDE_BIN` | Path to `claude` if it is not on `PATH` |
+| `SONGHERO_CODEX_MODEL` | Model passed to `codex exec -m` (overrides `~/.codex/config.toml`) |
+| `SONGHERO_CODEX_EFFORT` | Codex reasoning effort (default `low`) |
+| `SONGHERO_CODEX_BIN` | Path to `codex`; otherwise found on `PATH`, in Codex.app or the VS Code extension |
+| `SONGHERO_AI_TIMEOUT` | Seconds before a CLI call is abandoned (default 180) |
+
 ## Usage
 
 ```bash
@@ -114,7 +145,8 @@ cp .env.example .env
 ./index.js <spotify_url> [options]
 
 Options:
-  --gemini          Use Gemini AI for enhanced note generation
+  --ai <provider>   AI for note mapping: gemini (default), claude or codex
+  --no-ai           Skip AI enhancement (alias: --no-gemini)
   --video           Force download music video
   --no-video        Skip music video download
   --output <dir>    Output directory (default: ~/Desktop/Clone Hero)

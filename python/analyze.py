@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """AI-powered audio analysis for Clone Hero chart generation.
-Uses librosa for beat/onset detection + Gemini for intelligent note mapping."""
+Uses librosa for beat/onset detection + an LLM (Gemini, Claude or Codex) for
+intelligent note mapping."""
 
-import sys, json, warnings, os, math, re
+import sys, json, warnings, os, math, re, glob, shutil, subprocess, tempfile
 import numpy as np
 warnings.filterwarnings("ignore")
 
@@ -10,6 +11,8 @@ import librosa
 from scipy.signal import find_peaks
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+AI_PROVIDERS = ("gemini", "claude", "codex")
+CLI_TIMEOUT = int(os.environ.get("SONGHERO_AI_TIMEOUT", "180"))
 RESOLUTION = 480  # ticks per beat
 
 def to_float(x):
@@ -85,7 +88,7 @@ def sync_lyrics_to_sections(lyrics_lines, sections, tempo, duration):
     return events
 
 
-def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
+def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None, ai_provider=None):
     """Full audio analysis pipeline."""
     
     print("Loading audio...", file=sys.stderr)
@@ -285,14 +288,17 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
         except Exception as e:
             print(f"  Lyrics sync failed (continuing without): {e}", file=sys.stderr)
     
-    if gemini_key:
+    if ai_provider == "gemini" and not gemini_key:
+        print("  ⚠ GEMINI_API_KEY not set — skipping AI enhancement", file=sys.stderr)
+        ai_provider = None
+    if ai_provider:
         try:
-            ai_suggestions = get_gemini_analysis(gemini_key, tempo, estimated_key, 
-                                                  sections, duration, onset_notes,
-                                                  section_features,
-                                                  metadata.get("name", ""), metadata.get("artist", ""))
+            ai_suggestions = get_ai_analysis(ai_provider, gemini_key, tempo, estimated_key,
+                                             sections, duration, onset_notes,
+                                             section_features,
+                                             metadata.get("name", ""), metadata.get("artist", ""))
         except Exception as e:
-            print(f"  Gemini analysis failed (continuing without): {e}", file=sys.stderr)
+            print(f"  AI analysis ({ai_provider}) failed (continuing without): {e}", file=sys.stderr)
         
         # Lyrics come ONLY from real sources (LRCLIB). Never from AI.
     
@@ -337,6 +343,7 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
         "beat_times": [float(t) for t in beat_times],
         "onset_count": len(onset_notes),
         "ai_enhanced": ai_suggestions is not None,
+        "ai_provider": ai_provider if ai_suggestions is not None else None,
         "ai_sections": ai_suggestions.get("sections") if ai_suggestions else None,
         "lyrics": lyrics if lyrics else [],
         "lyrics_scaled": lyrics_scaled,
@@ -859,9 +866,85 @@ def extract_section_features(sections, onset_notes, onset_env, rms, spectral_cen
     return features
 
 
-def get_gemini_analysis(api_key, tempo, key, sections, duration, onset_notes, section_features=None, song_name="", artist=""):
-    """Use Gemini to enhance analysis with musical judgment from audio features."""
-    import urllib.request, time
+def _call_gemini(model, api_key, prompt):
+    """Send the prompt to the Gemini REST API and return the reply text."""
+    import urllib.request
+
+    req_data = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048}
+    }).encode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    req = urllib.request.Request(url, data=req_data,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        result = json.loads(resp.read())
+    return result["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def _find_codex():
+    """Locate the codex binary: $SONGHERO_CODEX_BIN, PATH, then the copies the
+    Codex desktop app and the VS Code extension ship with."""
+    explicit = os.environ.get("SONGHERO_CODEX_BIN")
+    if explicit:
+        return explicit
+    found = shutil.which("codex")
+    if found:
+        return found
+    candidates = ["/Applications/Codex.app/Contents/Resources/codex"]
+    candidates += sorted(glob.glob(os.path.expanduser(
+        "~/.vscode/extensions/openai.chatgpt-*/bin/*/codex")), reverse=True)
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    raise RuntimeError("codex CLI not found (install it or set SONGHERO_CODEX_BIN)")
+
+
+def _call_cli(provider, prompt):
+    """Run the prompt through a locally logged-in agent CLI (Claude Code or Codex),
+    so the user's subscription is used instead of an API key. Runs in an empty
+    temp dir with tools disabled/read-only so the agent only answers the prompt."""
+    with tempfile.TemporaryDirectory(prefix="songhero-ai-") as tmp:
+        if provider == "claude":
+            cmd = [os.environ.get("SONGHERO_CLAUDE_BIN", "claude"), "-p",
+                   "--output-format", "text", "--tools", "",
+                   "--no-session-persistence", "--strict-mcp-config"]
+            if os.environ.get("SONGHERO_CLAUDE_MODEL"):
+                cmd += ["--model", os.environ["SONGHERO_CLAUDE_MODEL"]]
+            # Without an API key in the environment Claude Code falls back to
+            # the logged-in subscription, which is the point of this provider.
+            env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                  cwd=tmp, env=env, timeout=CLI_TIMEOUT)
+            if proc.returncode != 0:
+                raise RuntimeError(f"claude exited {proc.returncode}: {(proc.stderr or proc.stdout).strip()[:300]}")
+            return proc.stdout
+
+        if provider == "codex":
+            out_file = os.path.join(tmp, "reply.txt")
+            cmd = [_find_codex(), "exec", "--skip-git-repo-check", "--ephemeral",
+                   "--sandbox", "read-only", "--color", "never",
+                   "-C", tmp, "-o", out_file,
+                   # Short structured answer: high reasoning effort only adds minutes
+                   "-c", f'model_reasoning_effort="{os.environ.get("SONGHERO_CODEX_EFFORT", "low")}"']
+            if os.environ.get("SONGHERO_CODEX_MODEL"):
+                cmd += ["-m", os.environ["SONGHERO_CODEX_MODEL"]]
+            cmd.append("-")
+            # Same idea as above: drop the API key so codex uses the ChatGPT login.
+            env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                  cwd=tmp, env=env, timeout=CLI_TIMEOUT)
+            if proc.returncode != 0 or not os.path.exists(out_file):
+                raise RuntimeError(f"codex exited {proc.returncode}: {(proc.stderr or proc.stdout).strip()[-300:]}")
+            with open(out_file) as f:
+                return f.read()
+
+    raise ValueError(f"Unknown AI provider: {provider}")
+
+
+def get_ai_analysis(provider, api_key, tempo, key, sections, duration, onset_notes, section_features=None, song_name="", artist=""):
+    """Use an LLM to enhance analysis with musical judgment from audio features."""
+    import urllib.error, time
     
     if not section_features:
         return None
@@ -931,26 +1014,19 @@ RULES:
 - Consider the onset_trend: "building" = rising energy section (pre-chorus?), "constant" = stable section.
 - Only output JSON. No markdown, no explanation."""
 
-    req_data = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048}
-    }).encode()
+    if provider == "gemini":
+        # Try primary model, fall back to backup
+        callers = [
+            lambda m=model: _call_gemini(m, api_key, prompt)
+            for model in ("gemini-3.1-flash-lite-preview", "gemini-2.5-flash-lite")
+        ]
+    else:
+        callers = [lambda: _call_cli(provider, prompt)]
     
-    # Try primary model, fall back to backup
-    models = [
-        "gemini-3.1-flash-lite-preview",
-        "gemini-2.5-flash-lite",
-    ]
-    
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    for call in callers:
         for attempt in range(2):
             try:
-                req = urllib.request.Request(url, data=req_data, 
-                                              headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=45) as resp:
-                    result = json.loads(resp.read())
-                text = result["candidates"][0]["content"]["parts"][0]["text"]
+                text = call()
                 
                 # Strip markdown fences
                 text = text.strip()
@@ -1011,7 +1087,7 @@ RULES:
                             sec["_pattern_key"] = key
                 
                 if not valid:
-                    continue  # Try next model
+                    break  # Try next model
                 
                 ns = len(data.get("sections", {}))
                 styles = set(s.get("guitar_style","?") for s in data["sections"].values())
@@ -1030,8 +1106,7 @@ RULES:
                 else:
                     break  # Try next model
     
-    print(f"  Gemini unavailable (all models/retries exhausted)", file=sys.stderr)
-    return None
+    print(f"  {provider} unavailable (all models/retries exhausted)", file=sys.stderr)
     return None
 
 def time_to_tick(t, bpm):
@@ -1041,11 +1116,18 @@ def time_to_tick(t, bpm):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "Usage: analyze.py <audio_file> [--gemini] [--lyrics-file <path>]"}))
+        print(json.dumps({"error": "Usage: analyze.py <audio_file> [--ai gemini|claude|codex] [--gemini] [--lyrics-file <path>]"}))
         sys.exit(1)
     
     audio_file = sys.argv[1]
-    use_gemini = "--gemini" in sys.argv
+    ai_provider = "gemini" if "--gemini" in sys.argv else None
+    if "--ai" in sys.argv:
+        idx = sys.argv.index("--ai")
+        if idx + 1 < len(sys.argv):
+            ai_provider = sys.argv[idx + 1].lower()
+        if ai_provider not in AI_PROVIDERS:
+            print(json.dumps({"error": f"Unknown --ai provider: {ai_provider}. Use: {', '.join(AI_PROVIDERS)}"}))
+            sys.exit(1)
     
     lyrics_file = None
     if "--lyrics-file" in sys.argv:
@@ -1057,11 +1139,11 @@ if __name__ == "__main__":
         print(json.dumps({"error": f"File not found: {audio_file}"}))
         sys.exit(1)
     
-    key = GEMINI_KEY if use_gemini else None
     # Build metadata from env vars if available
     metadata = {
         "name": os.environ.get("SONG_NAME", ""),
         "artist": os.environ.get("SONG_ARTIST", ""),
     }
-    result = analyze_audio(audio_file, gemini_key=key, metadata=metadata, lyrics_file=lyrics_file)
+    result = analyze_audio(audio_file, gemini_key=GEMINI_KEY, metadata=metadata,
+                           lyrics_file=lyrics_file, ai_provider=ai_provider)
     print(json.dumps(result))

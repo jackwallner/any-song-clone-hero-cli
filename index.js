@@ -18,6 +18,10 @@ const { generateSongIni } = require('./lib/songini');
 const CLONE_HERO_DIR = path.join(require('os').homedir(), 'Desktop', 'Clone Hero');
 const OUTPUT_DIR = path.join(__dirname, 'output');
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+// gemini uses GEMINI_API_KEY; claude and codex shell out to the locally logged-in
+// Claude Code / Codex CLI, so they run on the user's subscription with no API key.
+const AI_PROVIDERS = ['gemini', 'claude', 'codex'];
+const DEFAULT_AI = (process.env.SONGHERO_AI || 'gemini').toLowerCase();
 
 // Windows Python installs expose `python`, not `python3`, so probe for a real
 // Python 3 instead of hardcoding one name. The installer puts the analysis
@@ -87,7 +91,10 @@ Usage:
 Auto-detects Spotify track vs playlist URLs. Defaults to Gemini AI + karaoke lyrics enabled.
 
 Options (to disable defaults):
-  --no-gemini       Disable Gemini AI enhancement
+  --ai <provider>   AI for note mapping: gemini (API key), claude or codex
+                    (uses your logged-in Claude Code / Codex CLI, no API key).
+                    Default: gemini, or $SONGHERO_AI
+  --no-ai           Disable AI enhancement (alias: --no-gemini)
   --no-lyrics       Disable karaoke lyrics
   --no-video        Skip video download
   --video           Force video download
@@ -104,13 +111,14 @@ Commands (via songhero --):
   keys set <service> <value>  Set an API key (gemini)
   help               Show this help
 
-Interactive mode (songhero -) supports: generate, playlist, gemini on|off,
+Interactive mode (songhero -) supports: generate, playlist, ai <provider>|off, gemini on|off,
 lyrics on|off, video on|off|auto, output <dir>, options, help, exit
 
 Examples:
   songhero https://open.spotify.com/track/xxx
   songhero https://open.spotify.com/playlist/xxx
   songhero spotify:track:xxx --no-gemini
+  songhero https://open.spotify.com/track/xxx --ai claude
   songhero -
 `);
 }
@@ -165,6 +173,7 @@ function showInteractiveHelp() {
   gen <url>         Alias for generate
   playlist <url>    Process all tracks in a Spotify playlist
   lyrics on|off     Toggle lyrics fetching (default: on)
+  ai gemini|claude|codex|off  Choose AI provider, or turn AI off
   gemini on|off     Toggle Gemini AI enhancement (default: on)
   video on|off|auto Video download mode (default: auto)
   skip-existing on|off  Skip already charted songs (default: on)
@@ -183,7 +192,7 @@ function showSessionOptions(session) {
   console.log('\n📋 Current Settings');
   console.log('──────────────────');
   console.log(`  Output:       ${session.outputBase}`);
-  console.log(`  Gemini AI:    ${session.useGemini ? 'ON' : 'OFF'}`);
+  console.log(`  AI:           ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
   console.log(`  Video:        ${session.noVideo ? 'OFF' : (session.forceVideo ? 'FORCED' : 'AUTO')}`);
   console.log(`  Lyrics:       ${session.fetchLyrics ? 'ON' : 'OFF'}`);
   console.log(`  Skip Existing: ${session.skipExisting ? 'ON' : 'OFF'}`);
@@ -196,10 +205,22 @@ function sanitize(name) {
   return name.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function parseAiProvider(args) {
+  const idx = args.indexOf('--ai');
+  if (idx === -1) return DEFAULT_AI;
+  const provider = (args[idx + 1] || '').toLowerCase();
+  if (!AI_PROVIDERS.includes(provider)) {
+    console.error(`Unknown --ai provider: ${provider || '(missing)'}. Use: ${AI_PROVIDERS.join(', ')}`);
+    process.exit(1);
+  }
+  return provider;
+}
+
 function parseInlineOptions(args) {
   const rateLimitIdx = args.indexOf('--rate-limit');
   return {
-    useGemini: !args.includes('--no-gemini'),
+    useAI: !args.includes('--no-gemini') && !args.includes('--no-ai'),
+    aiProvider: parseAiProvider(args),
     forceVideo: args.includes('--video'),
     noVideo: args.includes('--no-video'),
     keepTemp: args.includes('--keep-temp'),
@@ -212,7 +233,8 @@ function parseInlineOptions(args) {
 
 async function runPipeline(spotifyUrl, options = {}) {
   const {
-    useGemini = false,
+    useAI = false,
+    aiProvider = DEFAULT_AI,
     forceVideo = false,
     noVideo = false,
     keepTemp = false,
@@ -301,11 +323,12 @@ async function runPipeline(spotifyUrl, options = {}) {
   const audioPath = path.join(workDir, audioFile);
   let analysis;
   try {
-    const geminiFlag = useGemini ? '--gemini' : '';
+    const aiFlag = useAI ? `--ai ${aiProvider}` : '';
     const lyricsFlag = (fetchLyrics && lyricsData) ? `--lyrics-file "${path.join(workDir, 'lyrics.json')}"` : '';
-    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'analyze.py')}" "${audioPath}" ${geminiFlag} ${lyricsFlag}`, {
+    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'analyze.py')}" "${audioPath}" ${aiFlag} ${lyricsFlag}`, {
       encoding: 'utf-8',
-      timeout: 120000,
+      // An agent CLI call takes far longer than one REST request
+      timeout: useAI && aiProvider !== 'gemini' ? 360000 : 120000,
       maxBuffer: 50 * 1024 * 1024,
       env: { 
         ...process.env, 
@@ -331,7 +354,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   console.log(`  ✓ Sections detected: ${analysis.sections.length}`);
   console.log(`  ✓ Notes generated: ${Object.values(analysis.difficulties).reduce((s, n) => s + n.length, 0)}`);
   if (analysis.ai_enhanced) {
-    console.log(`  ✓ Gemini AI enhancement applied`);
+    console.log(`  ✓ AI enhancement applied (${analysis.ai_provider || aiProvider})`);
   }
   if (analysis.lyrics && analysis.lyrics.length > 0) {
     console.log(`  ✓ Lyrics synced: ${analysis.lyrics.length} events`);
@@ -440,7 +463,7 @@ async function processPlaylist(playlistUrl, options = {}) {
   
   const RATE_LIMIT_MS = options.rateLimitMs != null 
     ? options.rateLimitMs 
-    : (options.useGemini ? 30000 : 5000);
+    : (options.useAI && options.aiProvider === 'gemini' ? 30000 : 5000);
 
   for (let i = 0; i < tracks.length; i++) {
     const track = tracks[i];
@@ -463,7 +486,8 @@ async function processPlaylist(playlistUrl, options = {}) {
 
 function buildSession(defaults = {}) {
   return {
-    useGemini: true,
+    useAI: true,
+    aiProvider: DEFAULT_AI,
     forceVideo: false,
     noVideo: false,
     keepTemp: false,
@@ -534,11 +558,20 @@ function interactiveMode() {
       }
 
       case 'gemini':
-        if (cmdArgs[0] === 'on') session.useGemini = true;
-        else if (cmdArgs[0] === 'off') session.useGemini = false;
+        if (cmdArgs[0] === 'on') { session.useAI = true; session.aiProvider = 'gemini'; }
+        else if (cmdArgs[0] === 'off') session.useAI = false;
         else { console.log('Usage: gemini on|off'); break; }
-        console.log(`  Gemini AI: ${session.useGemini ? 'ON' : 'OFF'}`);
+        console.log(`  AI: ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
         break;
+
+      case 'ai': {
+        const choice = (cmdArgs[0] || '').toLowerCase();
+        if (choice === 'off') session.useAI = false;
+        else if (AI_PROVIDERS.includes(choice)) { session.useAI = true; session.aiProvider = choice; }
+        else if (choice) { console.log(`Usage: ai ${AI_PROVIDERS.join('|')}|off`); break; }
+        console.log(`  AI: ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
+        break;
+      }
 
       case 'lyrics':
         if (cmdArgs[0] === 'on') session.fetchLyrics = true;
@@ -638,7 +671,7 @@ async function execCommand(cmdArgs) {
     case 'generate':
     case 'gen': {
       if (args.length < 1) {
-        console.error('Usage: songhero -- generate <spotify_url> [--gemini] [--lyrics] [--video]');
+        console.error('Usage: songhero -- generate <spotify_url> [--ai gemini|claude|codex] [--no-ai] [--no-lyrics] [--video]');
         process.exit(1);
       }
       const inline = parseInlineOptions(args);
@@ -655,7 +688,7 @@ async function execCommand(cmdArgs) {
 
     case 'playlist': {
       if (args.length < 1) {
-        console.error('Usage: songhero -- playlist <spotify_playlist_url> [--gemini] [--lyrics]');
+        console.error('Usage: songhero -- playlist <spotify_playlist_url> [--ai gemini|claude|codex] [--no-ai] [--no-lyrics]');
         process.exit(1);
       }
       const inline = parseInlineOptions(args);
