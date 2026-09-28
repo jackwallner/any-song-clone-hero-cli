@@ -3,7 +3,7 @@
 // dotenv is optional: a missing node_modules should not stop the CLI, it just
 // means .env is not read.
 try {
-  require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+  require('dotenv').config({ path: require('path').join(__dirname, '.env'), quiet: true });
 } catch (err) {
   if (err.code !== 'MODULE_NOT_FOUND') throw err;
 }
@@ -16,7 +16,10 @@ const { downloadSong } = require('./lib/download');
 const { generateSongIni } = require('./lib/songini');
 const { isYouTubeUrl, resolveYouTube } = require('./lib/youtube');
 
-const CLONE_HERO_DIR = path.join(require('os').homedir(), 'Desktop', 'Clone Hero');
+// SONGHERO_OUTPUT (e.g. in .env) points at the Clone Hero Songs folder; ~ is expanded
+const CLONE_HERO_DIR = process.env.SONGHERO_OUTPUT
+  ? process.env.SONGHERO_OUTPUT.replace(/^~(?=$|\/)/, require('os').homedir())
+  : path.join(require('os').homedir(), 'Desktop', 'Clone Hero');
 const OUTPUT_DIR = path.join(__dirname, 'output');
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 // gemini uses GEMINI_API_KEY; claude and codex shell out to the locally logged-in
@@ -106,7 +109,7 @@ Options (to disable defaults):
   --no-skip-existing   Process songs even if already charted
   --rewrite         Overwrite existing charts
   --rate-limit <ms> Milliseconds between tracks (default: 5000, 30000 with Gemini)
-  --output <dir>    Chart output directory (default: ~/Desktop/Clone Hero)
+  --output <dir>    Chart output directory (default: ~/Desktop/Clone Hero, or $SONGHERO_OUTPUT)
   --keep-temp       Keep temp files
 
 Commands (via songhero --):

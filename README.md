@@ -125,6 +125,7 @@ some of your subscription quota.
 | Variable | Effect |
 |----------|--------|
 | `SONGHERO_AI` | Default provider: `gemini`, `claude` or `codex` |
+| `SONGHERO_OUTPUT` | Default output folder, e.g. `~/Clone Hero/Songs` |
 | `SONGHERO_CLAUDE_MODEL` | Model passed to `claude --model` |
 | `SONGHERO_CLAUDE_BIN` | Path to `claude` if it is not on `PATH` |
 | `SONGHERO_CODEX_MODEL` | Model passed to `codex exec -m` (overrides `~/.codex/config.toml`) |
