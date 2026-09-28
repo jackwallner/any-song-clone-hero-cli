@@ -133,6 +133,25 @@ some of your subscription quota.
 | `SONGHERO_CODEX_BIN` | Path to `codex`; otherwise found on `PATH`, in Codex.app or the VS Code extension |
 | `SONGHERO_AI_TIMEOUT` | Seconds before a CLI call is abandoned (default 180) |
 
+### Drums (optional)
+
+SongHero can also chart **pro drums** (4 lanes with cymbal markers, four
+difficulties). It separates the drum stem with [Demucs](https://github.com/facebookresearch/demucs),
+detects hits per frequency band (kick, snare, hi-hat, ride, crash, toms) and
+snaps them to the beat grid. Install Demucs into the SongHero venv to turn it on:
+
+```bash
+~/.songhero/venv/bin/pip install demucs   # pulls in PyTorch (~2 GB)
+```
+
+Drums are then charted by default; skip them with `--no-drums` or
+`SONGHERO_DRUMS=0`. Separation takes about 30 s per song on Apple Silicon (GPU)
+and a few minutes on CPU. The model (80 MB) downloads on first use.
+
+Accuracy against a human-charted live-drummer song: kick F1 0.78, snare 0.84,
+cymbals/toms 0.73. Hi-hat vs ride vs crash is a heuristic and toms are charted
+conservatively, so expect to see fewer toms than a human charter would add.
+
 ### YouTube links
 
 You can chart a YouTube video directly. Title and artist come from the video
@@ -171,6 +190,7 @@ pass `--no-video`. YouTube playlists are not supported yet.
 
 Options:
   --ai <provider>   AI for note mapping: gemini (default), claude or codex
+  --no-drums        Skip drum charting
   --youtube <url>   With a Spotify link: use this YouTube video for audio/video
   --artist <name>   Override the artist name
   --title <name>    Override the song title

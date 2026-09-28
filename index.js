@@ -26,6 +26,8 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 // Claude Code / Codex CLI, so they run on the user's subscription with no API key.
 const AI_PROVIDERS = ['gemini', 'claude', 'codex'];
 const DEFAULT_AI = (process.env.SONGHERO_AI || 'gemini').toLowerCase();
+// Drum charting needs Demucs (PyTorch) in the analysis venv; SONGHERO_DRUMS=0 turns it off
+const DEFAULT_DRUMS = !['0', 'false', 'off', 'no'].includes((process.env.SONGHERO_DRUMS || '').toLowerCase());
 
 // Windows Python installs expose `python`, not `python3`, so probe for a real
 // Python 3 instead of hardcoding one name. The installer puts the analysis
@@ -100,6 +102,7 @@ Options (to disable defaults):
                     Default: gemini, or $SONGHERO_AI
   --no-ai           Disable AI enhancement (alias: --no-gemini)
   --no-lyrics       Disable karaoke lyrics
+  --no-drums        Skip drum charting (needs Demucs; default on, or $SONGHERO_DRUMS=0)
   --youtube <url>   With a Spotify link: use this YouTube video for audio/video
                     instead of searching YouTube
   --artist <name>   Override the artist name (useful for YouTube links)
@@ -120,7 +123,7 @@ Commands (via songhero --):
   help               Show this help
 
 Interactive mode (songhero -) supports: generate, playlist, ai <provider>|off, gemini on|off,
-lyrics on|off, video on|off|auto, output <dir>, options, help, exit
+drums on|off, lyrics on|off, video on|off|auto, output <dir>, options, help, exit
 
 Examples:
   songhero https://open.spotify.com/track/xxx
@@ -183,6 +186,7 @@ function showInteractiveHelp() {
   gen <url>         Alias for generate
   playlist <url>    Process all tracks in a Spotify playlist
   lyrics on|off     Toggle lyrics fetching (default: on)
+  drums on|off      Toggle drum charting (default: on)
   ai gemini|claude|codex|off  Choose AI provider, or turn AI off
   gemini on|off     Toggle Gemini AI enhancement (default: on)
   video on|off|auto Video download mode (default: auto)
@@ -205,6 +209,7 @@ function showSessionOptions(session) {
   console.log(`  AI:           ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
   console.log(`  Video:        ${session.noVideo ? 'OFF' : (session.forceVideo ? 'FORCED' : 'AUTO')}`);
   console.log(`  Lyrics:       ${session.fetchLyrics ? 'ON' : 'OFF'}`);
+  console.log(`  Drums:        ${session.chartDrums ? 'ON' : 'OFF'}`);
   console.log(`  Skip Existing: ${session.skipExisting ? 'ON' : 'OFF'}`);
   console.log(`  Rate Limit:   ${session.rateLimitMs != null ? session.rateLimitMs + 'ms' : 'auto'}`);
   console.log(`  Keep Temp:    ${session.keepTemp ? 'ON' : 'OFF'}`);
@@ -254,6 +259,7 @@ function parseInlineOptions(args) {
     artistOverride: flagValue(args, '--artist'),
     titleOverride: flagValue(args, '--title'),
     useAI: !args.includes('--no-gemini') && !args.includes('--no-ai'),
+    chartDrums: args.includes('--drums') || (DEFAULT_DRUMS && !args.includes('--no-drums')),
     aiProvider: parseAiProvider(args),
     forceVideo: args.includes('--video'),
     noVideo: args.includes('--no-video'),
@@ -274,6 +280,7 @@ async function runPipeline(sourceUrl, options = {}) {
     titleOverride = null,
     useAI = false,
     aiProvider = DEFAULT_AI,
+    chartDrums = false,
     forceVideo = false,
     noVideo = false,
     keepTemp = false,
@@ -417,10 +424,33 @@ async function runPipeline(sourceUrl, options = {}) {
     console.log(`  ⚠ Lyrics dropped: audio ${analysis.lyrics_offset_seconds.toFixed(0)}s longer than LRCLIB reference`);
   }
 
-  console.log('\nStep 4/5: Generating chart file...');
-  
   const analysisJson = path.join(workDir, 'analysis.json');
   fs.writeFileSync(analysisJson, JSON.stringify(analysis));
+
+  if (chartDrums) {
+    console.log('\nStep 3.5/5: Charting drums...');
+    try {
+      const out = execSync(
+        `"${PYTHON}" "${path.join(__dirname, 'python', 'drums.py')}" "${audioPath}" "${analysisJson}" --stem "${path.join(workDir, 'drums.wav')}"`,
+        { encoding: 'utf-8', timeout: 900000, maxBuffer: 50 * 1024 * 1024 }
+      );
+      const drums = JSON.parse(out);
+      if (drums.error) {
+        console.log(`  ⚠ ${drums.error} — skipping drums`);
+      } else {
+        Object.assign(analysis.difficulties, drums.difficulties);
+        analysis.has_drums = true;
+        fs.writeFileSync(analysisJson, JSON.stringify(analysis));
+        const hits = drums.stats && drums.stats.hits ? drums.stats.hits : {};
+        const summary = Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(', ');
+        console.log(`  ✓ Drums charted (${summary})`);
+      }
+    } catch (e) {
+      console.log(`  ⚠ Drum charting failed (continuing without): ${e.message.split('\n')[0]}`);
+    }
+  }
+
+  console.log('\nStep 4/5: Generating chart file...');
   
   const metadataJson = path.join(workDir, 'metadata.json');
   const fullMetadata = {
@@ -543,6 +573,7 @@ function buildSession(defaults = {}) {
   return {
     useAI: true,
     aiProvider: DEFAULT_AI,
+    chartDrums: DEFAULT_DRUMS,
     forceVideo: false,
     noVideo: false,
     keepTemp: false,
@@ -627,6 +658,13 @@ function interactiveMode() {
         console.log(`  AI: ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
         break;
       }
+
+      case 'drums':
+        if (cmdArgs[0] === 'on') session.chartDrums = true;
+        else if (cmdArgs[0] === 'off') session.chartDrums = false;
+        else { console.log('Usage: drums on|off'); break; }
+        console.log(`  Drums: ${session.chartDrums ? 'ON' : 'OFF'}`);
+        break;
 
       case 'lyrics':
         if (cmdArgs[0] === 'on') session.fetchLyrics = true;
