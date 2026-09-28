@@ -14,6 +14,7 @@ const fs = require('fs');
 const readline = require('readline');
 const { downloadSong } = require('./lib/download');
 const { generateSongIni } = require('./lib/songini');
+const { isYouTubeUrl, resolveYouTube } = require('./lib/youtube');
 
 const CLONE_HERO_DIR = path.join(require('os').homedir(), 'Desktop', 'Clone Hero');
 const OUTPUT_DIR = path.join(__dirname, 'output');
@@ -84,7 +85,7 @@ function showHelp() {
 SongHero CLI - Generate Clone Hero charts from Spotify links
 
 Usage:
-  songhero <url>                  Paste any Spotify link — auto-detects track or playlist
+  songhero <url>                  Paste a Spotify link (track or playlist) or a YouTube video link
   songhero -                      Interactive REPL
   songhero -- <command> [args]    Shell-friendly command mode
 
@@ -96,6 +97,10 @@ Options (to disable defaults):
                     Default: gemini, or $SONGHERO_AI
   --no-ai           Disable AI enhancement (alias: --no-gemini)
   --no-lyrics       Disable karaoke lyrics
+  --youtube <url>   With a Spotify link: use this YouTube video for audio/video
+                    instead of searching YouTube
+  --artist <name>   Override the artist name (useful for YouTube links)
+  --title <name>    Override the song title
   --no-video        Skip video download
   --video           Force video download
   --no-skip-existing   Process songs even if already charted
@@ -105,7 +110,7 @@ Options (to disable defaults):
   --keep-temp       Keep temp files
 
 Commands (via songhero --):
-  generate <url>     Chart a single Spotify track
+  generate <url>     Chart a single Spotify track or YouTube video
   playlist <url>     Chart an entire Spotify playlist
   keys               Show API key status
   keys set <service> <value>  Set an API key (gemini)
@@ -119,6 +124,8 @@ Examples:
   songhero https://open.spotify.com/playlist/xxx
   songhero spotify:track:xxx --no-gemini
   songhero https://open.spotify.com/track/xxx --ai claude
+  songhero https://www.youtube.com/watch?v=xxx
+  songhero https://open.spotify.com/track/xxx --youtube https://youtu.be/xxx
   songhero -
 `);
 }
@@ -169,7 +176,7 @@ function showInteractiveHelp() {
   console.log(`
 🎸 SongHero Interactive Commands
 ─────────────────────────────────
-  generate <url>    Run the full pipeline on a Spotify URL
+  generate <url>    Run the full pipeline on a Spotify or YouTube URL
   gen <url>         Alias for generate
   playlist <url>    Process all tracks in a Spotify playlist
   lyrics on|off     Toggle lyrics fetching (default: on)
@@ -216,9 +223,33 @@ function parseAiProvider(args) {
   return provider;
 }
 
+// Value of `--flag <value>`, or null when the flag is absent
+function flagValue(args, flag) {
+  const idx = args.indexOf(flag);
+  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : null;
+}
+
+const VALUE_FLAGS = ['--ai', '--rate-limit', '--output', '--youtube', '--artist', '--title'];
+
+// First argument that is a song/playlist link and not the value of a flag
+function findSourceUrl(args) {
+  return args.find((a, i) =>
+    (a.startsWith('http') || a.startsWith('spotify:')) && !VALUE_FLAGS.includes(args[i - 1]));
+}
+
 function parseInlineOptions(args) {
   const rateLimitIdx = args.indexOf('--rate-limit');
+  const youtubeUrl = flagValue(args, '--youtube');
+  if (youtubeUrl && !isYouTubeUrl(youtubeUrl)) {
+    console.error(`--youtube expects a YouTube link, got: ${youtubeUrl}`);
+    process.exit(1);
+  }
+  const output = flagValue(args, '--output');
   return {
+    ...(output ? { outputBase: output } : {}),
+    youtubeUrl,
+    artistOverride: flagValue(args, '--artist'),
+    titleOverride: flagValue(args, '--title'),
     useAI: !args.includes('--no-gemini') && !args.includes('--no-ai'),
     aiProvider: parseAiProvider(args),
     forceVideo: args.includes('--video'),
@@ -231,8 +262,13 @@ function parseInlineOptions(args) {
   };
 }
 
-async function runPipeline(spotifyUrl, options = {}) {
+// sourceUrl is a Spotify track or a YouTube video. With a Spotify link,
+// options.youtubeUrl picks the exact video instead of searching YouTube.
+async function runPipeline(sourceUrl, options = {}) {
   const {
+    youtubeUrl = null,
+    artistOverride = null,
+    titleOverride = null,
     useAI = false,
     aiProvider = DEFAULT_AI,
     forceVideo = false,
@@ -245,26 +281,42 @@ async function runPipeline(spotifyUrl, options = {}) {
     skipExisting = true,
   } = options;
 
-  console.log('Step 1/5: Resolving Spotify link...');
+  const fromYouTube = isYouTubeUrl(sourceUrl);
   let metadata;
-  try {
-    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'spotify.py')}" "${spotifyUrl}"`, {
-      encoding: 'utf-8',
-      timeout: 30000
-    });
-    metadata = JSON.parse(result);
+  if (fromYouTube) {
+    console.log('Step 1/5: Resolving YouTube video...');
+    metadata = resolveYouTube(sourceUrl);
     if (metadata.error) {
       console.error(`  ✗ ${metadata.error}`);
       return false;
     }
-  } catch (e) {
-    console.error('  ✗ Failed to resolve Spotify link:', e.message);
-    return false;
+  } else {
+    console.log('Step 1/5: Resolving Spotify link...');
+    try {
+      const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'spotify.py')}" "${sourceUrl}"`, {
+        encoding: 'utf-8',
+        timeout: 30000
+      });
+      metadata = JSON.parse(result);
+      if (metadata.error) {
+        console.error(`  ✗ ${metadata.error}`);
+        return false;
+      }
+    } catch (e) {
+      console.error('  ✗ Failed to resolve Spotify link:', e.message);
+      return false;
+    }
   }
+  if (artistOverride) metadata.artist = artistOverride;
+  if (titleOverride) metadata.name = titleOverride;
   console.log(`  ✓ ${metadata.artist} - ${metadata.name}`);
+  if (fromYouTube && !artistOverride && !titleOverride) {
+    console.log(`    (from "${metadata.youtube_title}" — fix with --artist/--title if wrong)`);
+  }
+  const videoSource = fromYouTube ? metadata.youtube_url : youtubeUrl;
 
   // Skip if already ingested and skipExisting is enabled
-  const folderName = `${metadata.artist} - ${metadata.name} (SongHero AI)`;
+  const folderName = sanitize(`${metadata.artist} - ${metadata.name} (SongHero AI)`);
   const outputPath = path.join(outputBase, folderName);
   if (skipExisting && fs.existsSync(outputPath) && !rewrite) {
     console.log(`  ⏭ Skipping: "${folderName}" already exists. Use --no-skip-existing or --rewrite to process.`);
@@ -277,7 +329,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   let downloadInfo;
   try {
     const videoMode = noVideo ? 'off' : (forceVideo ? 'on' : 'auto');
-    downloadInfo = await downloadSong(metadata.artist, metadata.name, workDir, videoMode);
+    downloadInfo = await downloadSong(metadata.artist, metadata.name, workDir, videoMode, videoSource);
     console.log(`  ✓ Audio downloaded`);
     if (downloadInfo.hasVideo) {
       console.log(`  ✓ Music video downloaded`);
@@ -349,7 +401,7 @@ async function runPipeline(spotifyUrl, options = {}) {
     return false;
   }
   
-  console.log(`  ✓ Tempo: ${Math.round(analysis.tempo / 10)} BPM`);
+  console.log(`  ✓ Tempo: ${Math.round(analysis.tempo / 1000)} BPM`);
   console.log(`  ✓ Key: ${analysis.key}`);
   console.log(`  ✓ Sections detected: ${analysis.sections.length}`);
   console.log(`  ✓ Notes generated: ${Object.values(analysis.difficulties).reduce((s, n) => s + n.length, 0)}`);
@@ -671,13 +723,13 @@ async function execCommand(cmdArgs) {
     case 'generate':
     case 'gen': {
       if (args.length < 1) {
-        console.error('Usage: songhero -- generate <spotify_url> [--ai gemini|claude|codex] [--no-ai] [--no-lyrics] [--video]');
+        console.error('Usage: songhero -- generate <spotify_or_youtube_url> [--youtube <url>] [--artist <name>] [--title <name>] [--ai gemini|claude|codex] [--no-ai] [--no-lyrics] [--video]');
         process.exit(1);
       }
       const inline = parseInlineOptions(args);
-      const url = args.find(a => a.startsWith('http') || a.startsWith('spotify:'));
+      const url = findSourceUrl(args);
       if (!url) {
-        console.error('No Spotify URL found in arguments');
+        console.error('No Spotify or YouTube URL found in arguments');
         process.exit(1);
       }
       showBanner();
@@ -769,14 +821,16 @@ async function main() {
 
   const url = args[0];
   const options = buildSession(parseInlineOptions(args));
-  
-  const outputIdx = args.indexOf('--output');
-  if (outputIdx !== -1) options.outputBase = args[outputIdx + 1];
 
   showBanner();
 
-  // Auto-detect: playlist vs track
-  if (url.includes('playlist')) {
+  if (isYouTubeUrl(url) && /[?&]list=|\/playlist/.test(url) && !/[?&]v=|youtu\.be\//.test(url)) {
+    console.error('YouTube playlists are not supported yet — pass a single video link.');
+    process.exit(1);
+  }
+
+  // Auto-detect: playlist vs track (a YouTube watch link with &list= is one video)
+  if (!isYouTubeUrl(url) && url.includes('playlist')) {
     await processPlaylist(url, options);
   } else {
     const ok = await runPipeline(url, options);

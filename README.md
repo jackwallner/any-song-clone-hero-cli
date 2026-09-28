@@ -1,6 +1,6 @@
 # 🎸 Any Song Clone Hero CLI
 
-Generate Clone Hero charts from **any Spotify link** — with AI-powered note generation, automatic difficulty scaling, and music video support.
+Generate Clone Hero charts from **any Spotify link or YouTube video** — with AI-powered note generation, automatic difficulty scaling, and music video support.
 
 ```
 songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
@@ -132,6 +132,30 @@ some of your subscription quota.
 | `SONGHERO_CODEX_BIN` | Path to `codex`; otherwise found on `PATH`, in Codex.app or the VS Code extension |
 | `SONGHERO_AI_TIMEOUT` | Seconds before a CLI call is abandoned (default 180) |
 
+### YouTube links
+
+You can chart a YouTube video directly. Title and artist come from the video
+(YouTube Music fields when present, otherwise the "Artist - Title" in the video
+title), and audio and music video are taken from that exact video instead of a
+YouTube search:
+
+```bash
+songhero https://www.youtube.com/watch?v=dQw4w9WgXcQ --ai claude
+
+# Fix the name if the video title is messy (used for lyrics lookup and the folder name)
+songhero https://youtu.be/xxxx --artist "Queen" --title "Bohemian Rhapsody"
+```
+
+To keep Spotify metadata but pick the exact video yourself (for example when
+the search lands on a live version), pass it with `--youtube`:
+
+```bash
+songhero https://open.spotify.com/track/xxxx --youtube https://youtu.be/xxxx
+```
+
+A video chosen by URL is always downloaded as the background video unless you
+pass `--no-video`. YouTube playlists are not supported yet.
+
 ## Usage
 
 ```bash
@@ -146,6 +170,9 @@ some of your subscription quota.
 
 Options:
   --ai <provider>   AI for note mapping: gemini (default), claude or codex
+  --youtube <url>   With a Spotify link: use this YouTube video for audio/video
+  --artist <name>   Override the artist name
+  --title <name>    Override the song title
   --no-ai           Skip AI enhancement (alias: --no-gemini)
   --video           Force download music video
   --no-video        Skip music video download
