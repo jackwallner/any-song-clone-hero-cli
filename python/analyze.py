@@ -166,6 +166,10 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None, ai
     if beat_coverage < 0.85:
         print(f"  ⚠ Beat tracking covers only {beat_coverage*100:.0f}% of audio — last {duration - beat_times[-1]:.1f}s untracked", file=sys.stderr)
     
+    # The chart stores tempo in millibeats per minute; round now so tick math
+    # and the declared tempo agree exactly
+    tempo = round(tempo * 1000) / 1000.0
+
     # Chroma for pitch analysis
     print("Analyzing pitch...", file=sys.stderr)
     chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=512)
@@ -309,22 +313,11 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None, ai
     difficulties = generate_all_difficulties(onset_notes, beat_times, sections, 
                                               tempo, fret_map, ai_suggestions, duration)
     
-    # Build tempo map from actual beat intervals
-    tempo_map = []
-    if len(beat_times) >= 2:
-        last_tick = 0
-        last_bpm = None
-        for i in range(len(beat_times) - 1):
-            interval = beat_times[i+1] - beat_times[i]
-            if interval <= 0:
-                continue
-            local_bpm = round(60.0 / interval)
-            tick = time_to_tick(beat_times[i], tempo)
-            if last_bpm is None or abs(local_bpm - last_bpm) > 1:
-                tempo_map.append({"tick": tick, "bpm": local_bpm * 1000})
-                last_bpm = local_bpm
-    if not tempo_map:
-        tempo_map = [{"tick": 0, "bpm": round(tempo * 1000)}]
+    # Every tick in this file is computed with the single constant `tempo`, so
+    # the chart must declare exactly that tempo from tick 0. A per-beat map of
+    # rounded local BPMs (as before) made Clone Hero place notes up to ~2 s
+    # early by the end of a song.
+    tempo_map = [{"tick": 0, "bpm": round(tempo * 1000)}]
     
     # Build sections for events
     section_events = []
