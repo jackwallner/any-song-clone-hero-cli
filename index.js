@@ -430,9 +430,15 @@ async function runPipeline(sourceUrl, options = {}) {
   if (chartDrums) {
     console.log('\nStep 3.5/5: Charting drums...');
     try {
+      const drumsAi = useAI ? `--ai ${aiProvider}` : '';
       const out = execSync(
-        `"${PYTHON}" "${path.join(__dirname, 'python', 'drums.py')}" "${audioPath}" "${analysisJson}" --stem "${path.join(workDir, 'drums.wav')}"`,
-        { encoding: 'utf-8', timeout: 900000, maxBuffer: 50 * 1024 * 1024 }
+        `"${PYTHON}" "${path.join(__dirname, 'python', 'drums.py')}" "${audioPath}" "${analysisJson}" --stem "${path.join(workDir, 'drums.wav')}" ${drumsAi}`,
+        {
+          encoding: 'utf-8',
+          timeout: 900000,
+          maxBuffer: 50 * 1024 * 1024,
+          env: { ...process.env, GEMINI_API_KEY: geminiKey, SONG_NAME: metadata.name, SONG_ARTIST: metadata.artist },
+        }
       );
       const drums = JSON.parse(out);
       if (drums.error) {
@@ -444,6 +450,8 @@ async function runPipeline(sourceUrl, options = {}) {
         const hits = drums.stats && drums.stats.hits ? drums.stats.hits : {};
         const summary = Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(', ');
         console.log(`  ✓ Drums charted (${summary})`);
+        console.log(`  ✓ Hard/Medium/Easy planned per section (${drums.stats.planner || 'rules'})`);
+        fs.writeFileSync(path.join(workDir, 'drum_plan.json'), JSON.stringify(drums.plan, null, 2));
       }
     } catch (e) {
       console.log(`  ⚠ Drum charting failed (continuing without): ${e.message.split('\n')[0]}`);

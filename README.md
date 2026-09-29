@@ -19,8 +19,9 @@ songhero "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --ai claude
    - Beat & onset detection
    - Pitch-to-fret mapping
    - Section detection (verse, chorus, bridge)
-4. **Drums** (optional) — Separates the drum stem with Demucs and charts kick,
-   snare, hi-hat, ride, crash and toms as pro drums
+4. **Drums** (optional) — Separates the drum stem with Demucs, detects kick,
+   snare, hi-hat, ride, crash and toms, then plans each section's groove
+   (optionally with the LLM as drum teacher) before writing pro drums
 5. **Generate** — Writes one `.chart` with guitar and drums, 4 difficulties each
 6. **Package** — Outputs a complete Clone Hero song folder
 
@@ -38,10 +39,22 @@ Guitar:
 | **Hard** | 70% | Yes | Yes | Orange notes, some chords |
 | **Expert** | 90% | Yes | Yes | Dense, all notes, complex patterns |
 
-Drums follow how human charters reduce a part: Expert has every detected hit
-(at most two pads plus kick at once), Hard drops ghost notes, Medium keeps the
-snare but thins kicks and cymbals to 8th notes, Easy plays one drum at a time
-on the beat plus 8th-note snares.
+Drums are written for who plays each level:
+
+| Difficulty | For | What you get |
+|-----------|-----|--------------|
+| **Easy** | First steps | One drum at a time on the beat: kick, snare backbeat, cymbal in between |
+| **Medium** | Drum learners | The same simple groove every bar: steady cymbal pulse, snare on the backbeat, kick on strong beats, one hand at a time, a short fill before a new section. No gaps while the band plays, and never more than ~3.4 hits per second |
+| **Hard** | Players training to get better | The song's real groove at 16th-note resolution with both hands, real fills and bar-to-bar variations |
+| **Expert** | Advanced | Every detected hit, including triplets |
+
+Easy, Medium and Hard are planned rather than filtered. For each section
+SongHero measures how often each drum lands on each 16th across its bars,
+finds the fills, and picks one cymbal for the section; sections with the same
+groove are merged so fills and crashes mark real changes. With AI enabled
+(`--ai`), the LLM revises that plan as a drum teacher would, and every change
+is checked against the audio evidence and the Medium speed limit before it is
+used. The plan is saved as `drum_plan.json` in the work folder (`--keep-temp`).
 
 ## Installation
 
@@ -135,20 +148,22 @@ export SONGHERO_AI=claude
 
 The call runs in an empty temp directory with tools disabled (Claude) or a
 read-only sandbox (Codex). `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` are stripped
-from its environment so the login is used rather than a key. Expect about
-5–15 seconds per song instead of about 1 second with Gemini, and each song uses
-some of your subscription quota.
+from its environment so the login is used rather than a key. Claude defaults to
+Opus 5.5 at high effort. A song makes two calls (guitar sections, then the drum
+plan), which adds roughly 30–60 seconds per song, and each song uses some of
+your subscription quota.
 
 | Variable | Effect |
 |----------|--------|
 | `SONGHERO_AI` | Default provider: `gemini`, `claude` or `codex` |
 | `SONGHERO_OUTPUT` | Default output folder, e.g. `~/Clone Hero/Songs` |
-| `SONGHERO_CLAUDE_MODEL` | Model passed to `claude --model` |
+| `SONGHERO_CLAUDE_MODEL` | Model passed to `claude --model` (default `claude-opus-5-5`) |
+| `SONGHERO_CLAUDE_EFFORT` | Effort passed to `claude --effort` (default `high`) |
 | `SONGHERO_CLAUDE_BIN` | Path to `claude` if it is not on `PATH` |
 | `SONGHERO_CODEX_MODEL` | Model passed to `codex exec -m` (overrides `~/.codex/config.toml`) |
 | `SONGHERO_CODEX_EFFORT` | Codex reasoning effort (default `low`) |
 | `SONGHERO_CODEX_BIN` | Path to `codex`; otherwise found on `PATH`, in Codex.app or the VS Code extension |
-| `SONGHERO_AI_TIMEOUT` | Seconds before a CLI call is abandoned (default 180) |
+| `SONGHERO_AI_TIMEOUT` | Seconds before a CLI call is abandoned (default 300) |
 | `SONGHERO_DRUMS` | `0` turns drum charting off by default |
 
 Put any of these in `.env` next to `index.js` (see `.env.example`) to make them
@@ -159,7 +174,10 @@ the default, so `songhero <url>` needs no flags.
 SongHero can also chart **pro drums** (4 lanes with cymbal markers, four
 difficulties). It separates the drum stem with [Demucs](https://github.com/facebookresearch/demucs),
 detects hits per frequency band (kick, snare, hi-hat, ride, crash, toms) and
-snaps them to the beat grid. Install Demucs into the SongHero venv to turn it on:
+snaps them to a beat grid that follows the tracked beats (so a live band's
+tempo drift does not smear the grooves). The kick is found in the drum and
+bass stems together, because Demucs files the sub of an electronic 808/909
+kick under bass. Install Demucs into the SongHero venv to turn it on:
 
 ```bash
 ~/.songhero/venv/bin/pip install demucs   # pulls in PyTorch (~2 GB)
@@ -169,9 +187,9 @@ Drums are then charted by default; skip them with `--no-drums` or
 `SONGHERO_DRUMS=0`. Separation takes about 30 s per song on Apple Silicon (GPU)
 and a few minutes on CPU. The model (80 MB) downloads on first use.
 
-Accuracy against a human-charted live-drummer song: kick F1 0.78, snare 0.84,
-cymbals/toms 0.73. Hi-hat vs ride vs crash is a heuristic and toms are charted
-conservatively, so expect to see fewer toms than a human charter would add.
+Expert accuracy against a human-charted live-drummer song: kick F1 0.78,
+snare 0.84, cymbals/toms 0.73. Hi-hat vs ride vs crash is a heuristic and toms
+are charted conservatively, so expect fewer toms than a human charter would add.
 
 ### YouTube links
 

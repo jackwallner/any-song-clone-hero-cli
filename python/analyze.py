@@ -3,16 +3,16 @@
 Uses librosa for beat/onset detection + an LLM (Gemini, Claude or Codex) for
 intelligent note mapping."""
 
-import sys, json, warnings, os, math, re, glob, shutil, subprocess, tempfile
+import sys, json, warnings, os, math, re
 import numpy as np
 warnings.filterwarnings("ignore")
 
 import librosa
 from scipy.signal import find_peaks
 
+from llm import AI_PROVIDERS, ask_json
+
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
-AI_PROVIDERS = ("gemini", "claude", "codex")
-CLI_TIMEOUT = int(os.environ.get("SONGHERO_AI_TIMEOUT", "180"))
 RESOLUTION = 480  # ticks per beat
 
 def to_float(x):
@@ -29,6 +29,25 @@ def time_to_tick(t, tempo, offset=0):
 def ticks_to_time(tick, tempo):
     """Convert ticks to seconds."""
     return tick * 60.0 / (RESOLUTION * tempo)
+
+def refine_tempo(beat_times, tempo):
+    """Average tempo from a line fitted through the tracked beats. Beat indices
+    come from the gaps, so a missed or doubled beat does not skew the fit."""
+    bt = np.asarray(beat_times, dtype=float)
+    if len(bt) < 16:
+        return tempo
+    d = np.diff(bt)
+    med = np.median(d)
+    if med <= 0:
+        return tempo
+    idx = np.concatenate([[0], np.cumsum(np.maximum(1, np.round(d / med)))])
+    slope, icpt = np.polyfit(idx, bt, 1)
+    keep = np.abs(bt - (slope * idx + icpt)) < 0.25 * med
+    if keep.sum() >= 16:
+        slope, icpt = np.polyfit(idx[keep], bt[keep], 1)
+    new = 60.0 / slope
+    return new if abs(new / tempo - 1) < 0.08 else tempo
+
 
 def sync_lyrics_to_sections(lyrics_lines, sections, tempo, duration):
     """Distribute lyric lines across detected song sections by time."""
@@ -166,6 +185,14 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None, ai
     if beat_coverage < 0.85:
         print(f"  ⚠ Beat tracking covers only {beat_coverage*100:.0f}% of audio — last {duration - beat_times[-1]:.1f}s untracked", file=sys.stderr)
     
+    # librosa's tempo estimate is often ~1% off; over a song that slides the
+    # chart's beat lines a full 16th every few bars. The tracked beats know
+    # better, so fit the average tempo to them.
+    refined = refine_tempo(beat_times, tempo)
+    if abs(refined - tempo) > 0.05:
+        print(f"  Tempo refined from tracked beats: {tempo:.2f} -> {refined:.2f} BPM", file=sys.stderr)
+    tempo = refined
+
     # The chart stores tempo in millibeats per minute; round now so tick math
     # and the declared tempo agree exactly
     tempo = round(tempo * 1000) / 1000.0
@@ -859,85 +886,8 @@ def extract_section_features(sections, onset_notes, onset_env, rms, spectral_cen
     return features
 
 
-def _call_gemini(model, api_key, prompt):
-    """Send the prompt to the Gemini REST API and return the reply text."""
-    import urllib.request
-
-    req_data = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048}
-    }).encode()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    req = urllib.request.Request(url, data=req_data,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=45) as resp:
-        result = json.loads(resp.read())
-    return result["candidates"][0]["content"]["parts"][0]["text"]
-
-
-def _find_codex():
-    """Locate the codex binary: $SONGHERO_CODEX_BIN, PATH, then the copies the
-    Codex desktop app and the VS Code extension ship with."""
-    explicit = os.environ.get("SONGHERO_CODEX_BIN")
-    if explicit:
-        return explicit
-    found = shutil.which("codex")
-    if found:
-        return found
-    candidates = ["/Applications/Codex.app/Contents/Resources/codex"]
-    candidates += sorted(glob.glob(os.path.expanduser(
-        "~/.vscode/extensions/openai.chatgpt-*/bin/*/codex")), reverse=True)
-    for c in candidates:
-        if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    raise RuntimeError("codex CLI not found (install it or set SONGHERO_CODEX_BIN)")
-
-
-def _call_cli(provider, prompt):
-    """Run the prompt through a locally logged-in agent CLI (Claude Code or Codex),
-    so the user's subscription is used instead of an API key. Runs in an empty
-    temp dir with tools disabled/read-only so the agent only answers the prompt."""
-    with tempfile.TemporaryDirectory(prefix="songhero-ai-") as tmp:
-        if provider == "claude":
-            cmd = [os.environ.get("SONGHERO_CLAUDE_BIN", "claude"), "-p",
-                   "--output-format", "text", "--tools", "",
-                   "--no-session-persistence", "--strict-mcp-config"]
-            if os.environ.get("SONGHERO_CLAUDE_MODEL"):
-                cmd += ["--model", os.environ["SONGHERO_CLAUDE_MODEL"]]
-            # Without an API key in the environment Claude Code falls back to
-            # the logged-in subscription, which is the point of this provider.
-            env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                  cwd=tmp, env=env, timeout=CLI_TIMEOUT)
-            if proc.returncode != 0:
-                raise RuntimeError(f"claude exited {proc.returncode}: {(proc.stderr or proc.stdout).strip()[:300]}")
-            return proc.stdout
-
-        if provider == "codex":
-            out_file = os.path.join(tmp, "reply.txt")
-            cmd = [_find_codex(), "exec", "--skip-git-repo-check", "--ephemeral",
-                   "--sandbox", "read-only", "--color", "never",
-                   "-C", tmp, "-o", out_file,
-                   # Short structured answer: high reasoning effort only adds minutes
-                   "-c", f'model_reasoning_effort="{os.environ.get("SONGHERO_CODEX_EFFORT", "low")}"']
-            if os.environ.get("SONGHERO_CODEX_MODEL"):
-                cmd += ["-m", os.environ["SONGHERO_CODEX_MODEL"]]
-            cmd.append("-")
-            # Same idea as above: drop the API key so codex uses the ChatGPT login.
-            env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                  cwd=tmp, env=env, timeout=CLI_TIMEOUT)
-            if proc.returncode != 0 or not os.path.exists(out_file):
-                raise RuntimeError(f"codex exited {proc.returncode}: {(proc.stderr or proc.stdout).strip()[-300:]}")
-            with open(out_file) as f:
-                return f.read()
-
-    raise ValueError(f"Unknown AI provider: {provider}")
-
-
 def get_ai_analysis(provider, api_key, tempo, key, sections, duration, onset_notes, section_features=None, song_name="", artist=""):
     """Use an LLM to enhance analysis with musical judgment from audio features."""
-    import urllib.error, time
     
     if not section_features:
         return None
@@ -1007,97 +957,45 @@ RULES:
 - Consider the onset_trend: "building" = rising energy section (pre-chorus?), "constant" = stable section.
 - Only output JSON. No markdown, no explanation."""
 
-    if provider == "gemini":
-        # Try primary model, fall back to backup
-        callers = [
-            lambda m=model: _call_gemini(m, api_key, prompt)
-            for model in ("gemini-3.1-flash-lite-preview", "gemini-2.5-flash-lite")
-        ]
-    else:
-        callers = [lambda: _call_cli(provider, prompt)]
-    
-    for call in callers:
-        for attempt in range(2):
-            try:
-                text = call()
-                
-                # Strip markdown fences
-                text = text.strip()
-                if text.startswith("```"):
-                    first_nl = text.find('\n')
-                    text = text[first_nl+1:] if first_nl > 0 else text[3:]
-                if text.rstrip().endswith("```"):
-                    text = text.rstrip()[:-3].strip()
-                
-                # Extract JSON object
-                start_brace = text.find('{')
-                end_brace = text.rfind('}')
-                if start_brace >= 0 and end_brace > start_brace:
-                    text = text[start_brace:end_brace+1]
-                text = text.strip()
-                
-                # Parse JSON with fallback
-                try:
-                    data = json.loads(text)
-                except json.JSONDecodeError:
-                    fixed = re.sub(r"'(\w+)':", r'"\1":', text)
-                    fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
-                    data = json.loads(fixed)
-                
-                # Validate AI output
-                valid = True
-                
-                # fret_emphasis validation
-                if "fret_emphasis" not in data or not isinstance(data["fret_emphasis"], list):
-                    valid = False
-                else:
-                    fw = data["fret_emphasis"]
-                    total = sum(float(x) for x in fw[:5])
-                    if total > 0:
-                        data["fret_emphasis"] = [float(x)/total for x in fw[:5]]
-                
-                # sections validation
-                if "sections" not in data or not isinstance(data["sections"], dict):
-                    valid = False
-                else:
-                    valid_styles = {"clean_arpeggios","palm_muted_chugs","open_chords","power_chords",
-                                    "lead_melody","single_note_riff","silence","octave_chords","arpeggiated_chords"}
-                    for key, sec in list(data["sections"].items()):
-                        if not isinstance(sec, dict): 
-                            continue
-                        gs = sec.get("guitar_style", "")
-                        if gs not in valid_styles:
-                            sec["guitar_style"] = "power_chords"  # safe default
-                        en = sec.get("energy", 5)
-                        sec["energy"] = max(1, min(10, int(en)))
-                        lb = sec.get("label", "verse")
-                        sec["label"] = lb
-                        # Resolve identical_to references
-                        ref = sec.get("identical_to")
-                        if ref and ref in data["sections"]:
-                            sec["_pattern_key"] = ref
-                        else:
-                            sec["_pattern_key"] = key
-                
-                if not valid:
-                    break  # Try next model
-                
-                ns = len(data.get("sections", {}))
-                styles = set(s.get("guitar_style","?") for s in data["sections"].values())
-                linked = sum(1 for s in data["sections"].values() if s.get("identical_to"))
-                print(f"  AI: {ns} sections, styles={styles}, {linked} linked repeats", file=sys.stderr)
-                
-                return data
-            except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < 1:
-                    time.sleep(5)
-                else:
-                    break  # Try next model
-            except Exception:
-                if attempt < 1:
-                    time.sleep(2)
-                else:
-                    break  # Try next model
+    def validate(data):
+        # fret_emphasis validation
+        if "fret_emphasis" not in data or not isinstance(data["fret_emphasis"], list):
+            return None
+        fw = data["fret_emphasis"]
+        total = sum(float(x) for x in fw[:5])
+        if total > 0:
+            data["fret_emphasis"] = [float(x)/total for x in fw[:5]]
+
+        # sections validation
+        if "sections" not in data or not isinstance(data["sections"], dict):
+            return None
+        valid_styles = {"clean_arpeggios","palm_muted_chugs","open_chords","power_chords",
+                        "lead_melody","single_note_riff","silence","octave_chords","arpeggiated_chords"}
+        for key, sec in list(data["sections"].items()):
+            if not isinstance(sec, dict):
+                continue
+            gs = sec.get("guitar_style", "")
+            if gs not in valid_styles:
+                sec["guitar_style"] = "power_chords"  # safe default
+            en = sec.get("energy", 5)
+            sec["energy"] = max(1, min(10, int(en)))
+            lb = sec.get("label", "verse")
+            sec["label"] = lb
+            # Resolve identical_to references
+            ref = sec.get("identical_to")
+            if ref and ref in data["sections"]:
+                sec["_pattern_key"] = ref
+            else:
+                sec["_pattern_key"] = key
+        return data
+
+    data = ask_json(provider, prompt, api_key, validate)
+    if data is not None:
+        ns = len(data.get("sections", {}))
+        styles = set(s.get("guitar_style","?") for s in data["sections"].values())
+        linked = sum(1 for s in data["sections"].values() if s.get("identical_to"))
+        print(f"  AI: {ns} sections, styles={styles}, {linked} linked repeats", file=sys.stderr)
+        return data
     
     print(f"  {provider} unavailable (all models/retries exhausted)", file=sys.stderr)
     return None
