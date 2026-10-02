@@ -1,23 +1,36 @@
 # 🎸 Any Song Clone Hero CLI
 
-Generate Clone Hero charts from **any Spotify link** — with AI-powered note generation, automatic difficulty scaling, and music video support.
+Generate Clone Hero charts from **any Spotify link or YouTube video** — guitar and
+pro drums, AI-assisted note generation, automatic difficulty scaling, synced
+lyrics and music video support.
 
 ```
-songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
+songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b
+songhero "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --ai claude
 ```
 
 ## How It Works
 
-1. **Resolve** — Extracts song metadata from Spotify (no API key needed)
-2. **Download** — Fetches audio + music video from YouTube via yt-dlp
-3. **Analyze** — AI-powered audio analysis using librosa + Gemini
+1. **Resolve** — Reads song metadata from the Spotify page or the YouTube video
+   (no API key needed)
+2. **Download** — Fetches audio + music video with yt-dlp: the exact video for a
+   YouTube link, otherwise a YouTube search for "artist - title"
+3. **Analyze** — Audio analysis with librosa, refined by an LLM (Gemini, Claude or Codex)
    - Beat & onset detection
    - Pitch-to-fret mapping
    - Section detection (verse, chorus, bridge)
-4. **Generate** — Creates `.chart` files with 4 difficulty levels
-5. **Package** — Outputs a complete Clone Hero song folder
+4. **Drums** (optional) — Separates the drum stem with Demucs, detects kick,
+   snare, hi-hat, ride, crash and toms, then plans each section's groove
+   (optionally with the LLM as drum teacher) before writing pro drums
+5. **Generate** — Writes one `.chart` with guitar and drums, 4 difficulties each
+6. **Package** — Outputs a complete Clone Hero song folder
+
+All notes are placed with one constant tempo that the chart also declares, so
+note timing matches the audio for the whole song.
 
 ## Difficulty Levels
+
+Guitar:
 
 | Difficulty | Note Density | Orange Fret | Chords | Description |
 |-----------|-------------|-------------|--------|-------------|
@@ -25,6 +38,23 @@ songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
 | **Medium** | 50% | No | No | Faster, more notes, no orange |
 | **Hard** | 70% | Yes | Yes | Orange notes, some chords |
 | **Expert** | 90% | Yes | Yes | Dense, all notes, complex patterns |
+
+Drums are written for who plays each level:
+
+| Difficulty | For | What you get |
+|-----------|-----|--------------|
+| **Easy** | First steps | One drum at a time on the beat: kick, snare backbeat, cymbal in between |
+| **Medium** | Drum learners | The same simple groove every bar: steady cymbal pulse, snare on the backbeat, kick on strong beats, one hand at a time, a short fill before a new section. No gaps while the band plays, and never more than ~3.4 hits per second |
+| **Hard** | Players training to get better | The song's real groove at 16th-note resolution with both hands, real fills and bar-to-bar variations |
+| **Expert** | Advanced | Every detected hit, including triplets |
+
+Easy, Medium and Hard are planned rather than filtered. For each section
+SongHero measures how often each drum lands on each 16th across its bars,
+finds the fills, and picks one cymbal for the section; sections with the same
+groove are merged so fills and crashes mark real changes. With AI enabled
+(`--ai`), the LLM revises that plan as a drum teacher would, and every change
+is checked against the audio evidence and the Medium speed limit before it is
+used. The plan is saved as `drum_plan.json` in the work folder (`--keep-temp`).
 
 ## Installation
 
@@ -101,34 +131,125 @@ export GEMINI_API_KEY="your-key-here"
 cp .env.example .env
 ```
 
+### Optional: Claude or Codex instead of Gemini (no API key)
+
+If you have [Claude Code](https://claude.com/claude-code) or the
+[Codex CLI](https://github.com/openai/codex) installed and logged in, SongHero can
+send the section analysis through that CLI instead of the Gemini API. It then
+runs on your Claude or ChatGPT subscription, and no API key is needed.
+
+```bash
+songhero <spotify_url> --ai claude
+songhero <spotify_url> --ai codex
+
+# Or make it the default
+export SONGHERO_AI=claude
+```
+
+The call runs in an empty temp directory with tools disabled (Claude) or a
+read-only sandbox (Codex). `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` are stripped
+from its environment so the login is used rather than a key. Claude defaults to
+Opus 5.5 at high effort. A song makes two calls (guitar sections, then the drum
+plan), which adds roughly 30–60 seconds per song, and each song uses some of
+your subscription quota.
+
+| Variable | Effect |
+|----------|--------|
+| `SONGHERO_AI` | Default provider: `gemini`, `claude` or `codex` |
+| `SONGHERO_OUTPUT` | Default output folder, e.g. `~/Clone Hero/Songs` |
+| `SONGHERO_CLAUDE_MODEL` | Model passed to `claude --model` (default `claude-opus-5-5`) |
+| `SONGHERO_CLAUDE_EFFORT` | Effort passed to `claude --effort` (default `high`) |
+| `SONGHERO_CLAUDE_BIN` | Path to `claude` if it is not on `PATH` |
+| `SONGHERO_CODEX_MODEL` | Model passed to `codex exec -m` (overrides `~/.codex/config.toml`) |
+| `SONGHERO_CODEX_EFFORT` | Codex reasoning effort (default `low`) |
+| `SONGHERO_CODEX_BIN` | Path to `codex`; otherwise found on `PATH`, in Codex.app or the VS Code extension |
+| `SONGHERO_AI_TIMEOUT` | Seconds before a CLI call is abandoned (default 300) |
+| `SONGHERO_DRUMS` | `0` turns drum charting off by default |
+
+Put any of these in `.env` next to `index.js` (see `.env.example`) to make them
+the default, so `songhero <url>` needs no flags.
+
+### Drums (optional)
+
+SongHero can also chart **pro drums** (4 lanes with cymbal markers, four
+difficulties). It separates the drum stem with [Demucs](https://github.com/facebookresearch/demucs),
+detects hits per frequency band (kick, snare, hi-hat, ride, crash, toms) and
+snaps them to a beat grid that follows the tracked beats (so a live band's
+tempo drift does not smear the grooves). The kick is found in the drum and
+bass stems together, because Demucs files the sub of an electronic 808/909
+kick under bass. Install Demucs into the SongHero venv to turn it on:
+
+```bash
+~/.songhero/venv/bin/pip install demucs   # pulls in PyTorch (~2 GB)
+```
+
+Drums are then charted by default; skip them with `--no-drums` or
+`SONGHERO_DRUMS=0`. Separation takes about 30 s per song on Apple Silicon (GPU)
+and a few minutes on CPU. The model (80 MB) downloads on first use.
+
+Expert accuracy against a human-charted live-drummer song: kick F1 0.78,
+snare 0.84, cymbals/toms 0.73. Hi-hat vs ride vs crash is a heuristic and toms
+are charted conservatively, so expect fewer toms than a human charter would add.
+
+### YouTube links
+
+You can chart a YouTube video directly. Title and artist come from the video
+(YouTube Music fields when present, otherwise the "Artist - Title" in the video
+title), and audio and music video are taken from that exact video instead of a
+YouTube search:
+
+```bash
+songhero https://www.youtube.com/watch?v=dQw4w9WgXcQ --ai claude
+
+# Fix the name if the video title is messy (used for lyrics lookup and the folder name)
+songhero https://youtu.be/xxxx --artist "Queen" --title "Bohemian Rhapsody"
+```
+
+To keep Spotify metadata but pick the exact video yourself (for example when
+the search lands on a live version), pass it with `--youtube`:
+
+```bash
+songhero https://open.spotify.com/track/xxxx --youtube https://youtu.be/xxxx
+```
+
+A video chosen by URL is always downloaded as the background video unless you
+pass `--no-video`. YouTube playlists are not supported yet.
+
 ## Usage
 
 ```bash
-# Basic usage
-./index.js <spotify_url>
-
-# With AI enhancement + music video
-./index.js <spotify_url> --gemini --video
+# Basic usage: Spotify track/playlist or YouTube video
+./index.js <spotify_or_youtube_url>
 
 # Full options
-./index.js <spotify_url> [options]
+./index.js <url> [options]
 
 Options:
-  --gemini          Use Gemini AI for enhanced note generation
+  --ai <provider>   AI for note mapping: gemini (default), claude or codex
+  --no-drums        Skip drum charting
+  --youtube <url>   With a Spotify link: use this YouTube video for audio/video
+  --artist <name>   Override the artist name
+  --title <name>    Override the song title
+  --no-ai           Skip AI enhancement (alias: --no-gemini)
   --video           Force download music video
   --no-video        Skip music video download
-  --output <dir>    Output directory (default: ~/Desktop/Clone Hero)
-  --keep-temp       Keep temporary files
+  --no-lyrics       Skip karaoke lyrics
+  --output <dir>    Output directory (default: ~/Desktop/Clone Hero, or $SONGHERO_OUTPUT)
+  --rewrite         Overwrite a song that was already charted
+  --keep-temp       Keep temporary files (including the separated drums.wav)
 ```
 
 ### Examples
 
 ```bash
-# Quick chart (no AI, no video)
-./index.js https://open.spotify.com/track/3DrNvXNKo4cr8YAjxvjgnp
+# Quick chart (no AI, no drums, no video)
+./index.js https://open.spotify.com/track/3DrNvXNKo4cr8YAjxvjgnp --no-ai --no-drums --no-video
 
-# Full experience
-./index.js spotify:track:0VjIjW4GlUZAMYd2vXMi3b --gemini --video
+# Full experience with Claude instead of a Gemini key
+./index.js spotify:track:0VjIjW4GlUZAMYd2vXMi3b --ai claude --video
+
+# Straight from YouTube
+./index.js "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 # Custom output
 ./index.js "https://open.spotify.com/track/..." --output ~/Documents/Charts
@@ -139,9 +260,9 @@ Options:
 Each song is saved as a Clone Hero-ready folder:
 
 ```
-~/Desktop/Clone Hero/
+~/Desktop/Clone Hero/          (or --output / $SONGHERO_OUTPUT)
 └── Artist - Song Name (SongHero AI)/
-    ├── notes.chart    # All 4 difficulties
+    ├── notes.chart    # Guitar + drums, 4 difficulties each
     ├── song.ini       # Song metadata
     ├── song.opus      # High-quality audio
     ├── album.jpg      # Album artwork
@@ -217,7 +338,8 @@ directory (`~/.songhero` for installer-based installs).
 
 - **CLI**: Node.js
 - **Audio Analysis**: Python (librosa, numpy, scipy)
-- **AI Enhancement**: Google Gemini 2.0 Flash
+- **Drum separation**: Demucs (PyTorch), optional
+- **AI Enhancement**: Google Gemini API, or the Claude Code / Codex CLI on your subscription
 - **Downloads**: yt-dlp + ffmpeg
 - **Chart Format**: Clone Hero `.chart` (MIDI-compatible)
 

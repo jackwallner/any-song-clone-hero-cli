@@ -117,6 +117,18 @@ def generate_chart(analysis_data, metadata):
             length = note.get("length", 0)
             lines.append(f"  {tick} = N {fret} {length}")
         lines.append("}")
+
+    # Drum tracks: lane 0 kick, 1 red, 2 yellow, 3 blue, 4 green; 66/67/68
+    # mark the yellow/blue/green note at the same tick as a cymbal (pro drums)
+    for diff_name in ["ExpertDrums", "HardDrums", "MediumDrums", "EasyDrums"]:
+        notes = difficulties.get(diff_name, [])
+        if not notes:
+            continue
+        lines.append(f"[{diff_name}]")
+        lines.append("{")
+        for note in sorted(notes, key=lambda n: (n["tick"], n["lane"])):
+            lines.append(f"  {note['tick']} = N {note['lane']} {note.get('length', 0)}")
+        lines.append("}")
     
     chart_text = "\n".join(lines)
     # Clone Hero requires UTF-8 BOM + CRLF line endings

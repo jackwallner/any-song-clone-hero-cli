@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """AI-powered audio analysis for Clone Hero chart generation.
-Uses librosa for beat/onset detection + Gemini for intelligent note mapping."""
+Uses librosa for beat/onset detection + an LLM (Gemini, Claude or Codex) for
+intelligent note mapping."""
 
 import sys, json, warnings, os, math, re
 import numpy as np
@@ -8,6 +9,8 @@ warnings.filterwarnings("ignore")
 
 import librosa
 from scipy.signal import find_peaks
+
+from llm import AI_PROVIDERS, ask_json
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 RESOLUTION = 480  # ticks per beat
@@ -26,6 +29,25 @@ def time_to_tick(t, tempo, offset=0):
 def ticks_to_time(tick, tempo):
     """Convert ticks to seconds."""
     return tick * 60.0 / (RESOLUTION * tempo)
+
+def refine_tempo(beat_times, tempo):
+    """Average tempo from a line fitted through the tracked beats. Beat indices
+    come from the gaps, so a missed or doubled beat does not skew the fit."""
+    bt = np.asarray(beat_times, dtype=float)
+    if len(bt) < 16:
+        return tempo
+    d = np.diff(bt)
+    med = np.median(d)
+    if med <= 0:
+        return tempo
+    idx = np.concatenate([[0], np.cumsum(np.maximum(1, np.round(d / med)))])
+    slope, icpt = np.polyfit(idx, bt, 1)
+    keep = np.abs(bt - (slope * idx + icpt)) < 0.25 * med
+    if keep.sum() >= 16:
+        slope, icpt = np.polyfit(idx[keep], bt[keep], 1)
+    new = 60.0 / slope
+    return new if abs(new / tempo - 1) < 0.08 else tempo
+
 
 def sync_lyrics_to_sections(lyrics_lines, sections, tempo, duration):
     """Distribute lyric lines across detected song sections by time."""
@@ -85,7 +107,7 @@ def sync_lyrics_to_sections(lyrics_lines, sections, tempo, duration):
     return events
 
 
-def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
+def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None, ai_provider=None):
     """Full audio analysis pipeline."""
     
     print("Loading audio...", file=sys.stderr)
@@ -163,6 +185,18 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
     if beat_coverage < 0.85:
         print(f"  ⚠ Beat tracking covers only {beat_coverage*100:.0f}% of audio — last {duration - beat_times[-1]:.1f}s untracked", file=sys.stderr)
     
+    # librosa's tempo estimate is often ~1% off; over a song that slides the
+    # chart's beat lines a full 16th every few bars. The tracked beats know
+    # better, so fit the average tempo to them.
+    refined = refine_tempo(beat_times, tempo)
+    if abs(refined - tempo) > 0.05:
+        print(f"  Tempo refined from tracked beats: {tempo:.2f} -> {refined:.2f} BPM", file=sys.stderr)
+    tempo = refined
+
+    # The chart stores tempo in millibeats per minute; round now so tick math
+    # and the declared tempo agree exactly
+    tempo = round(tempo * 1000) / 1000.0
+
     # Chroma for pitch analysis
     print("Analyzing pitch...", file=sys.stderr)
     chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=512)
@@ -285,14 +319,17 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
         except Exception as e:
             print(f"  Lyrics sync failed (continuing without): {e}", file=sys.stderr)
     
-    if gemini_key:
+    if ai_provider == "gemini" and not gemini_key:
+        print("  ⚠ GEMINI_API_KEY not set — skipping AI enhancement", file=sys.stderr)
+        ai_provider = None
+    if ai_provider:
         try:
-            ai_suggestions = get_gemini_analysis(gemini_key, tempo, estimated_key, 
-                                                  sections, duration, onset_notes,
-                                                  section_features,
-                                                  metadata.get("name", ""), metadata.get("artist", ""))
+            ai_suggestions = get_ai_analysis(ai_provider, gemini_key, tempo, estimated_key,
+                                             sections, duration, onset_notes,
+                                             section_features,
+                                             metadata.get("name", ""), metadata.get("artist", ""))
         except Exception as e:
-            print(f"  Gemini analysis failed (continuing without): {e}", file=sys.stderr)
+            print(f"  AI analysis ({ai_provider}) failed (continuing without): {e}", file=sys.stderr)
         
         # Lyrics come ONLY from real sources (LRCLIB). Never from AI.
     
@@ -303,22 +340,11 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
     difficulties = generate_all_difficulties(onset_notes, beat_times, sections, 
                                               tempo, fret_map, ai_suggestions, duration)
     
-    # Build tempo map from actual beat intervals
-    tempo_map = []
-    if len(beat_times) >= 2:
-        last_tick = 0
-        last_bpm = None
-        for i in range(len(beat_times) - 1):
-            interval = beat_times[i+1] - beat_times[i]
-            if interval <= 0:
-                continue
-            local_bpm = round(60.0 / interval)
-            tick = time_to_tick(beat_times[i], tempo)
-            if last_bpm is None or abs(local_bpm - last_bpm) > 1:
-                tempo_map.append({"tick": tick, "bpm": local_bpm * 1000})
-                last_bpm = local_bpm
-    if not tempo_map:
-        tempo_map = [{"tick": 0, "bpm": round(tempo * 1000)}]
+    # Every tick in this file is computed with the single constant `tempo`, so
+    # the chart must declare exactly that tempo from tick 0. A per-beat map of
+    # rounded local BPMs (as before) made Clone Hero place notes up to ~2 s
+    # early by the end of a song.
+    tempo_map = [{"tick": 0, "bpm": round(tempo * 1000)}]
     
     # Build sections for events
     section_events = []
@@ -337,6 +363,7 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
         "beat_times": [float(t) for t in beat_times],
         "onset_count": len(onset_notes),
         "ai_enhanced": ai_suggestions is not None,
+        "ai_provider": ai_provider if ai_suggestions is not None else None,
         "ai_sections": ai_suggestions.get("sections") if ai_suggestions else None,
         "lyrics": lyrics if lyrics else [],
         "lyrics_scaled": lyrics_scaled,
@@ -859,9 +886,8 @@ def extract_section_features(sections, onset_notes, onset_env, rms, spectral_cen
     return features
 
 
-def get_gemini_analysis(api_key, tempo, key, sections, duration, onset_notes, section_features=None, song_name="", artist=""):
-    """Use Gemini to enhance analysis with musical judgment from audio features."""
-    import urllib.request, time
+def get_ai_analysis(provider, api_key, tempo, key, sections, duration, onset_notes, section_features=None, song_name="", artist=""):
+    """Use an LLM to enhance analysis with musical judgment from audio features."""
     
     if not section_features:
         return None
@@ -931,107 +957,47 @@ RULES:
 - Consider the onset_trend: "building" = rising energy section (pre-chorus?), "constant" = stable section.
 - Only output JSON. No markdown, no explanation."""
 
-    req_data = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048}
-    }).encode()
+    def validate(data):
+        # fret_emphasis validation
+        if "fret_emphasis" not in data or not isinstance(data["fret_emphasis"], list):
+            return None
+        fw = data["fret_emphasis"]
+        total = sum(float(x) for x in fw[:5])
+        if total > 0:
+            data["fret_emphasis"] = [float(x)/total for x in fw[:5]]
+
+        # sections validation
+        if "sections" not in data or not isinstance(data["sections"], dict):
+            return None
+        valid_styles = {"clean_arpeggios","palm_muted_chugs","open_chords","power_chords",
+                        "lead_melody","single_note_riff","silence","octave_chords","arpeggiated_chords"}
+        for key, sec in list(data["sections"].items()):
+            if not isinstance(sec, dict):
+                continue
+            gs = sec.get("guitar_style", "")
+            if gs not in valid_styles:
+                sec["guitar_style"] = "power_chords"  # safe default
+            en = sec.get("energy", 5)
+            sec["energy"] = max(1, min(10, int(en)))
+            lb = sec.get("label", "verse")
+            sec["label"] = lb
+            # Resolve identical_to references
+            ref = sec.get("identical_to")
+            if ref and ref in data["sections"]:
+                sec["_pattern_key"] = ref
+            else:
+                sec["_pattern_key"] = key
+        return data
+
+    data = ask_json(provider, prompt, api_key, validate)
+    if data is not None:
+        ns = len(data.get("sections", {}))
+        styles = set(s.get("guitar_style","?") for s in data["sections"].values())
+        linked = sum(1 for s in data["sections"].values() if s.get("identical_to"))
+        print(f"  AI: {ns} sections, styles={styles}, {linked} linked repeats", file=sys.stderr)
+        return data
     
-    # Try primary model, fall back to backup
-    models = [
-        "gemini-3.1-flash-lite-preview",
-        "gemini-2.5-flash-lite",
-    ]
-    
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(url, data=req_data, 
-                                              headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=45) as resp:
-                    result = json.loads(resp.read())
-                text = result["candidates"][0]["content"]["parts"][0]["text"]
-                
-                # Strip markdown fences
-                text = text.strip()
-                if text.startswith("```"):
-                    first_nl = text.find('\n')
-                    text = text[first_nl+1:] if first_nl > 0 else text[3:]
-                if text.rstrip().endswith("```"):
-                    text = text.rstrip()[:-3].strip()
-                
-                # Extract JSON object
-                start_brace = text.find('{')
-                end_brace = text.rfind('}')
-                if start_brace >= 0 and end_brace > start_brace:
-                    text = text[start_brace:end_brace+1]
-                text = text.strip()
-                
-                # Parse JSON with fallback
-                try:
-                    data = json.loads(text)
-                except json.JSONDecodeError:
-                    fixed = re.sub(r"'(\w+)':", r'"\1":', text)
-                    fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
-                    data = json.loads(fixed)
-                
-                # Validate AI output
-                valid = True
-                
-                # fret_emphasis validation
-                if "fret_emphasis" not in data or not isinstance(data["fret_emphasis"], list):
-                    valid = False
-                else:
-                    fw = data["fret_emphasis"]
-                    total = sum(float(x) for x in fw[:5])
-                    if total > 0:
-                        data["fret_emphasis"] = [float(x)/total for x in fw[:5]]
-                
-                # sections validation
-                if "sections" not in data or not isinstance(data["sections"], dict):
-                    valid = False
-                else:
-                    valid_styles = {"clean_arpeggios","palm_muted_chugs","open_chords","power_chords",
-                                    "lead_melody","single_note_riff","silence","octave_chords","arpeggiated_chords"}
-                    for key, sec in list(data["sections"].items()):
-                        if not isinstance(sec, dict): 
-                            continue
-                        gs = sec.get("guitar_style", "")
-                        if gs not in valid_styles:
-                            sec["guitar_style"] = "power_chords"  # safe default
-                        en = sec.get("energy", 5)
-                        sec["energy"] = max(1, min(10, int(en)))
-                        lb = sec.get("label", "verse")
-                        sec["label"] = lb
-                        # Resolve identical_to references
-                        ref = sec.get("identical_to")
-                        if ref and ref in data["sections"]:
-                            sec["_pattern_key"] = ref
-                        else:
-                            sec["_pattern_key"] = key
-                
-                if not valid:
-                    continue  # Try next model
-                
-                ns = len(data.get("sections", {}))
-                styles = set(s.get("guitar_style","?") for s in data["sections"].values())
-                linked = sum(1 for s in data["sections"].values() if s.get("identical_to"))
-                print(f"  AI: {ns} sections, styles={styles}, {linked} linked repeats", file=sys.stderr)
-                
-                return data
-            except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < 1:
-                    time.sleep(5)
-                else:
-                    break  # Try next model
-            except Exception:
-                if attempt < 1:
-                    time.sleep(2)
-                else:
-                    break  # Try next model
-    
-    print(f"  Gemini unavailable (all models/retries exhausted)", file=sys.stderr)
-    return None
+    print(f"  {provider} unavailable (all models/retries exhausted)", file=sys.stderr)
     return None
 
 def time_to_tick(t, bpm):
@@ -1041,11 +1007,18 @@ def time_to_tick(t, bpm):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "Usage: analyze.py <audio_file> [--gemini] [--lyrics-file <path>]"}))
+        print(json.dumps({"error": "Usage: analyze.py <audio_file> [--ai gemini|claude|codex] [--gemini] [--lyrics-file <path>]"}))
         sys.exit(1)
     
     audio_file = sys.argv[1]
-    use_gemini = "--gemini" in sys.argv
+    ai_provider = "gemini" if "--gemini" in sys.argv else None
+    if "--ai" in sys.argv:
+        idx = sys.argv.index("--ai")
+        if idx + 1 < len(sys.argv):
+            ai_provider = sys.argv[idx + 1].lower()
+        if ai_provider not in AI_PROVIDERS:
+            print(json.dumps({"error": f"Unknown --ai provider: {ai_provider}. Use: {', '.join(AI_PROVIDERS)}"}))
+            sys.exit(1)
     
     lyrics_file = None
     if "--lyrics-file" in sys.argv:
@@ -1057,11 +1030,11 @@ if __name__ == "__main__":
         print(json.dumps({"error": f"File not found: {audio_file}"}))
         sys.exit(1)
     
-    key = GEMINI_KEY if use_gemini else None
     # Build metadata from env vars if available
     metadata = {
         "name": os.environ.get("SONG_NAME", ""),
         "artist": os.environ.get("SONG_ARTIST", ""),
     }
-    result = analyze_audio(audio_file, gemini_key=key, metadata=metadata, lyrics_file=lyrics_file)
+    result = analyze_audio(audio_file, gemini_key=GEMINI_KEY, metadata=metadata,
+                           lyrics_file=lyrics_file, ai_provider=ai_provider)
     print(json.dumps(result))

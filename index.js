@@ -3,7 +3,7 @@
 // dotenv is optional: a missing node_modules should not stop the CLI, it just
 // means .env is not read.
 try {
-  require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+  require('dotenv').config({ path: require('path').join(__dirname, '.env'), quiet: true });
 } catch (err) {
   if (err.code !== 'MODULE_NOT_FOUND') throw err;
 }
@@ -14,10 +14,20 @@ const fs = require('fs');
 const readline = require('readline');
 const { downloadSong } = require('./lib/download');
 const { generateSongIni } = require('./lib/songini');
+const { isYouTubeUrl, resolveYouTube } = require('./lib/youtube');
 
-const CLONE_HERO_DIR = path.join(require('os').homedir(), 'Desktop', 'Clone Hero');
+// SONGHERO_OUTPUT (e.g. in .env) points at the Clone Hero Songs folder; ~ is expanded
+const CLONE_HERO_DIR = process.env.SONGHERO_OUTPUT
+  ? process.env.SONGHERO_OUTPUT.replace(/^~(?=$|\/)/, require('os').homedir())
+  : path.join(require('os').homedir(), 'Desktop', 'Clone Hero');
 const OUTPUT_DIR = path.join(__dirname, 'output');
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+// gemini uses GEMINI_API_KEY; claude and codex shell out to the locally logged-in
+// Claude Code / Codex CLI, so they run on the user's subscription with no API key.
+const AI_PROVIDERS = ['gemini', 'claude', 'codex'];
+const DEFAULT_AI = (process.env.SONGHERO_AI || 'gemini').toLowerCase();
+// Drum charting needs Demucs (PyTorch) in the analysis venv; SONGHERO_DRUMS=0 turns it off
+const DEFAULT_DRUMS = !['0', 'false', 'off', 'no'].includes((process.env.SONGHERO_DRUMS || '').toLowerCase());
 
 // Windows Python installs expose `python`, not `python3`, so probe for a real
 // Python 3 instead of hardcoding one name. The installer puts the analysis
@@ -80,37 +90,48 @@ function showHelp() {
 SongHero CLI - Generate Clone Hero charts from Spotify links
 
 Usage:
-  songhero <url>                  Paste any Spotify link — auto-detects track or playlist
+  songhero <url>                  Paste a Spotify link (track or playlist) or a YouTube video link
   songhero -                      Interactive REPL
   songhero -- <command> [args]    Shell-friendly command mode
 
 Auto-detects Spotify track vs playlist URLs. Defaults to Gemini AI + karaoke lyrics enabled.
 
 Options (to disable defaults):
-  --no-gemini       Disable Gemini AI enhancement
+  --ai <provider>   AI for note mapping: gemini (API key), claude or codex
+                    (uses your logged-in Claude Code / Codex CLI, no API key).
+                    Default: gemini, or $SONGHERO_AI
+  --no-ai           Disable AI enhancement (alias: --no-gemini)
   --no-lyrics       Disable karaoke lyrics
+  --no-drums        Skip drum charting (needs Demucs; default on, or $SONGHERO_DRUMS=0)
+  --youtube <url>   With a Spotify link: use this YouTube video for audio/video
+                    instead of searching YouTube
+  --artist <name>   Override the artist name (useful for YouTube links)
+  --title <name>    Override the song title
   --no-video        Skip video download
   --video           Force video download
   --no-skip-existing   Process songs even if already charted
   --rewrite         Overwrite existing charts
   --rate-limit <ms> Milliseconds between tracks (default: 5000, 30000 with Gemini)
-  --output <dir>    Chart output directory (default: ~/Desktop/Clone Hero)
+  --output <dir>    Chart output directory (default: ~/Desktop/Clone Hero, or $SONGHERO_OUTPUT)
   --keep-temp       Keep temp files
 
 Commands (via songhero --):
-  generate <url>     Chart a single Spotify track
+  generate <url>     Chart a single Spotify track or YouTube video
   playlist <url>     Chart an entire Spotify playlist
   keys               Show API key status
   keys set <service> <value>  Set an API key (gemini)
   help               Show this help
 
-Interactive mode (songhero -) supports: generate, playlist, gemini on|off,
-lyrics on|off, video on|off|auto, output <dir>, options, help, exit
+Interactive mode (songhero -) supports: generate, playlist, ai <provider>|off, gemini on|off,
+drums on|off, lyrics on|off, video on|off|auto, output <dir>, options, help, exit
 
 Examples:
   songhero https://open.spotify.com/track/xxx
   songhero https://open.spotify.com/playlist/xxx
   songhero spotify:track:xxx --no-gemini
+  songhero https://open.spotify.com/track/xxx --ai claude
+  songhero https://www.youtube.com/watch?v=xxx
+  songhero https://open.spotify.com/track/xxx --youtube https://youtu.be/xxx
   songhero -
 `);
 }
@@ -161,10 +182,12 @@ function showInteractiveHelp() {
   console.log(`
 🎸 SongHero Interactive Commands
 ─────────────────────────────────
-  generate <url>    Run the full pipeline on a Spotify URL
+  generate <url>    Run the full pipeline on a Spotify or YouTube URL
   gen <url>         Alias for generate
   playlist <url>    Process all tracks in a Spotify playlist
   lyrics on|off     Toggle lyrics fetching (default: on)
+  drums on|off      Toggle drum charting (default: on)
+  ai gemini|claude|codex|off  Choose AI provider, or turn AI off
   gemini on|off     Toggle Gemini AI enhancement (default: on)
   video on|off|auto Video download mode (default: auto)
   skip-existing on|off  Skip already charted songs (default: on)
@@ -183,9 +206,10 @@ function showSessionOptions(session) {
   console.log('\n📋 Current Settings');
   console.log('──────────────────');
   console.log(`  Output:       ${session.outputBase}`);
-  console.log(`  Gemini AI:    ${session.useGemini ? 'ON' : 'OFF'}`);
+  console.log(`  AI:           ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
   console.log(`  Video:        ${session.noVideo ? 'OFF' : (session.forceVideo ? 'FORCED' : 'AUTO')}`);
   console.log(`  Lyrics:       ${session.fetchLyrics ? 'ON' : 'OFF'}`);
+  console.log(`  Drums:        ${session.chartDrums ? 'ON' : 'OFF'}`);
   console.log(`  Skip Existing: ${session.skipExisting ? 'ON' : 'OFF'}`);
   console.log(`  Rate Limit:   ${session.rateLimitMs != null ? session.rateLimitMs + 'ms' : 'auto'}`);
   console.log(`  Keep Temp:    ${session.keepTemp ? 'ON' : 'OFF'}`);
@@ -196,10 +220,47 @@ function sanitize(name) {
   return name.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function parseAiProvider(args) {
+  const idx = args.indexOf('--ai');
+  if (idx === -1) return DEFAULT_AI;
+  const provider = (args[idx + 1] || '').toLowerCase();
+  if (!AI_PROVIDERS.includes(provider)) {
+    console.error(`Unknown --ai provider: ${provider || '(missing)'}. Use: ${AI_PROVIDERS.join(', ')}`);
+    process.exit(1);
+  }
+  return provider;
+}
+
+// Value of `--flag <value>`, or null when the flag is absent
+function flagValue(args, flag) {
+  const idx = args.indexOf(flag);
+  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : null;
+}
+
+const VALUE_FLAGS = ['--ai', '--rate-limit', '--output', '--youtube', '--artist', '--title'];
+
+// First argument that is a song/playlist link and not the value of a flag
+function findSourceUrl(args) {
+  return args.find((a, i) =>
+    (a.startsWith('http') || a.startsWith('spotify:')) && !VALUE_FLAGS.includes(args[i - 1]));
+}
+
 function parseInlineOptions(args) {
   const rateLimitIdx = args.indexOf('--rate-limit');
+  const youtubeUrl = flagValue(args, '--youtube');
+  if (youtubeUrl && !isYouTubeUrl(youtubeUrl)) {
+    console.error(`--youtube expects a YouTube link, got: ${youtubeUrl}`);
+    process.exit(1);
+  }
+  const output = flagValue(args, '--output');
   return {
-    useGemini: !args.includes('--no-gemini'),
+    ...(output ? { outputBase: output } : {}),
+    youtubeUrl,
+    artistOverride: flagValue(args, '--artist'),
+    titleOverride: flagValue(args, '--title'),
+    useAI: !args.includes('--no-gemini') && !args.includes('--no-ai'),
+    chartDrums: args.includes('--drums') || (DEFAULT_DRUMS && !args.includes('--no-drums')),
+    aiProvider: parseAiProvider(args),
     forceVideo: args.includes('--video'),
     noVideo: args.includes('--no-video'),
     keepTemp: args.includes('--keep-temp'),
@@ -210,9 +271,16 @@ function parseInlineOptions(args) {
   };
 }
 
-async function runPipeline(spotifyUrl, options = {}) {
+// sourceUrl is a Spotify track or a YouTube video. With a Spotify link,
+// options.youtubeUrl picks the exact video instead of searching YouTube.
+async function runPipeline(sourceUrl, options = {}) {
   const {
-    useGemini = false,
+    youtubeUrl = null,
+    artistOverride = null,
+    titleOverride = null,
+    useAI = false,
+    aiProvider = DEFAULT_AI,
+    chartDrums = false,
     forceVideo = false,
     noVideo = false,
     keepTemp = false,
@@ -223,26 +291,42 @@ async function runPipeline(spotifyUrl, options = {}) {
     skipExisting = true,
   } = options;
 
-  console.log('Step 1/5: Resolving Spotify link...');
+  const fromYouTube = isYouTubeUrl(sourceUrl);
   let metadata;
-  try {
-    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'spotify.py')}" "${spotifyUrl}"`, {
-      encoding: 'utf-8',
-      timeout: 30000
-    });
-    metadata = JSON.parse(result);
+  if (fromYouTube) {
+    console.log('Step 1/5: Resolving YouTube video...');
+    metadata = resolveYouTube(sourceUrl);
     if (metadata.error) {
       console.error(`  ✗ ${metadata.error}`);
       return false;
     }
-  } catch (e) {
-    console.error('  ✗ Failed to resolve Spotify link:', e.message);
-    return false;
+  } else {
+    console.log('Step 1/5: Resolving Spotify link...');
+    try {
+      const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'spotify.py')}" "${sourceUrl}"`, {
+        encoding: 'utf-8',
+        timeout: 30000
+      });
+      metadata = JSON.parse(result);
+      if (metadata.error) {
+        console.error(`  ✗ ${metadata.error}`);
+        return false;
+      }
+    } catch (e) {
+      console.error('  ✗ Failed to resolve Spotify link:', e.message);
+      return false;
+    }
   }
+  if (artistOverride) metadata.artist = artistOverride;
+  if (titleOverride) metadata.name = titleOverride;
   console.log(`  ✓ ${metadata.artist} - ${metadata.name}`);
+  if (fromYouTube && !artistOverride && !titleOverride) {
+    console.log(`    (from "${metadata.youtube_title}" — fix with --artist/--title if wrong)`);
+  }
+  const videoSource = fromYouTube ? metadata.youtube_url : youtubeUrl;
 
   // Skip if already ingested and skipExisting is enabled
-  const folderName = `${metadata.artist} - ${metadata.name} (SongHero AI)`;
+  const folderName = sanitize(`${metadata.artist} - ${metadata.name} (SongHero AI)`);
   const outputPath = path.join(outputBase, folderName);
   if (skipExisting && fs.existsSync(outputPath) && !rewrite) {
     console.log(`  ⏭ Skipping: "${folderName}" already exists. Use --no-skip-existing or --rewrite to process.`);
@@ -255,7 +339,7 @@ async function runPipeline(spotifyUrl, options = {}) {
   let downloadInfo;
   try {
     const videoMode = noVideo ? 'off' : (forceVideo ? 'on' : 'auto');
-    downloadInfo = await downloadSong(metadata.artist, metadata.name, workDir, videoMode);
+    downloadInfo = await downloadSong(metadata.artist, metadata.name, workDir, videoMode, videoSource);
     console.log(`  ✓ Audio downloaded`);
     if (downloadInfo.hasVideo) {
       console.log(`  ✓ Music video downloaded`);
@@ -301,11 +385,12 @@ async function runPipeline(spotifyUrl, options = {}) {
   const audioPath = path.join(workDir, audioFile);
   let analysis;
   try {
-    const geminiFlag = useGemini ? '--gemini' : '';
+    const aiFlag = useAI ? `--ai ${aiProvider}` : '';
     const lyricsFlag = (fetchLyrics && lyricsData) ? `--lyrics-file "${path.join(workDir, 'lyrics.json')}"` : '';
-    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'analyze.py')}" "${audioPath}" ${geminiFlag} ${lyricsFlag}`, {
+    const result = execSync(`"${PYTHON}" "${path.join(__dirname, 'python', 'analyze.py')}" "${audioPath}" ${aiFlag} ${lyricsFlag}`, {
       encoding: 'utf-8',
-      timeout: 120000,
+      // An agent CLI call takes far longer than one REST request
+      timeout: useAI && aiProvider !== 'gemini' ? 360000 : 120000,
       maxBuffer: 50 * 1024 * 1024,
       env: { 
         ...process.env, 
@@ -326,12 +411,12 @@ async function runPipeline(spotifyUrl, options = {}) {
     return false;
   }
   
-  console.log(`  ✓ Tempo: ${Math.round(analysis.tempo / 10)} BPM`);
+  console.log(`  ✓ Tempo: ${Math.round(analysis.tempo / 1000)} BPM`);
   console.log(`  ✓ Key: ${analysis.key}`);
   console.log(`  ✓ Sections detected: ${analysis.sections.length}`);
   console.log(`  ✓ Notes generated: ${Object.values(analysis.difficulties).reduce((s, n) => s + n.length, 0)}`);
   if (analysis.ai_enhanced) {
-    console.log(`  ✓ Gemini AI enhancement applied`);
+    console.log(`  ✓ AI enhancement applied (${analysis.ai_provider || aiProvider})`);
   }
   if (analysis.lyrics && analysis.lyrics.length > 0) {
     console.log(`  ✓ Lyrics synced: ${analysis.lyrics.length} events`);
@@ -339,10 +424,41 @@ async function runPipeline(spotifyUrl, options = {}) {
     console.log(`  ⚠ Lyrics dropped: audio ${analysis.lyrics_offset_seconds.toFixed(0)}s longer than LRCLIB reference`);
   }
 
-  console.log('\nStep 4/5: Generating chart file...');
-  
   const analysisJson = path.join(workDir, 'analysis.json');
   fs.writeFileSync(analysisJson, JSON.stringify(analysis));
+
+  if (chartDrums) {
+    console.log('\nStep 3.5/5: Charting drums...');
+    try {
+      const drumsAi = useAI ? `--ai ${aiProvider}` : '';
+      const out = execSync(
+        `"${PYTHON}" "${path.join(__dirname, 'python', 'drums.py')}" "${audioPath}" "${analysisJson}" --stem "${path.join(workDir, 'drums.wav')}" ${drumsAi}`,
+        {
+          encoding: 'utf-8',
+          timeout: 900000,
+          maxBuffer: 50 * 1024 * 1024,
+          env: { ...process.env, GEMINI_API_KEY: geminiKey, SONG_NAME: metadata.name, SONG_ARTIST: metadata.artist },
+        }
+      );
+      const drums = JSON.parse(out);
+      if (drums.error) {
+        console.log(`  ⚠ ${drums.error} — skipping drums`);
+      } else {
+        Object.assign(analysis.difficulties, drums.difficulties);
+        analysis.has_drums = true;
+        fs.writeFileSync(analysisJson, JSON.stringify(analysis));
+        const hits = drums.stats && drums.stats.hits ? drums.stats.hits : {};
+        const summary = Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(', ');
+        console.log(`  ✓ Drums charted (${summary})`);
+        console.log(`  ✓ Hard/Medium/Easy planned per section (${drums.stats.planner || 'rules'})`);
+        fs.writeFileSync(path.join(workDir, 'drum_plan.json'), JSON.stringify(drums.plan, null, 2));
+      }
+    } catch (e) {
+      console.log(`  ⚠ Drum charting failed (continuing without): ${e.message.split('\n')[0]}`);
+    }
+  }
+
+  console.log('\nStep 4/5: Generating chart file...');
   
   const metadataJson = path.join(workDir, 'metadata.json');
   const fullMetadata = {
@@ -440,7 +556,7 @@ async function processPlaylist(playlistUrl, options = {}) {
   
   const RATE_LIMIT_MS = options.rateLimitMs != null 
     ? options.rateLimitMs 
-    : (options.useGemini ? 30000 : 5000);
+    : (options.useAI && options.aiProvider === 'gemini' ? 30000 : 5000);
 
   for (let i = 0; i < tracks.length; i++) {
     const track = tracks[i];
@@ -463,7 +579,9 @@ async function processPlaylist(playlistUrl, options = {}) {
 
 function buildSession(defaults = {}) {
   return {
-    useGemini: true,
+    useAI: true,
+    aiProvider: DEFAULT_AI,
+    chartDrums: DEFAULT_DRUMS,
     forceVideo: false,
     noVideo: false,
     keepTemp: false,
@@ -534,10 +652,26 @@ function interactiveMode() {
       }
 
       case 'gemini':
-        if (cmdArgs[0] === 'on') session.useGemini = true;
-        else if (cmdArgs[0] === 'off') session.useGemini = false;
+        if (cmdArgs[0] === 'on') { session.useAI = true; session.aiProvider = 'gemini'; }
+        else if (cmdArgs[0] === 'off') session.useAI = false;
         else { console.log('Usage: gemini on|off'); break; }
-        console.log(`  Gemini AI: ${session.useGemini ? 'ON' : 'OFF'}`);
+        console.log(`  AI: ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
+        break;
+
+      case 'ai': {
+        const choice = (cmdArgs[0] || '').toLowerCase();
+        if (choice === 'off') session.useAI = false;
+        else if (AI_PROVIDERS.includes(choice)) { session.useAI = true; session.aiProvider = choice; }
+        else if (choice) { console.log(`Usage: ai ${AI_PROVIDERS.join('|')}|off`); break; }
+        console.log(`  AI: ${session.useAI ? `ON (${session.aiProvider})` : 'OFF'}`);
+        break;
+      }
+
+      case 'drums':
+        if (cmdArgs[0] === 'on') session.chartDrums = true;
+        else if (cmdArgs[0] === 'off') session.chartDrums = false;
+        else { console.log('Usage: drums on|off'); break; }
+        console.log(`  Drums: ${session.chartDrums ? 'ON' : 'OFF'}`);
         break;
 
       case 'lyrics':
@@ -638,13 +772,13 @@ async function execCommand(cmdArgs) {
     case 'generate':
     case 'gen': {
       if (args.length < 1) {
-        console.error('Usage: songhero -- generate <spotify_url> [--gemini] [--lyrics] [--video]');
+        console.error('Usage: songhero -- generate <spotify_or_youtube_url> [--youtube <url>] [--artist <name>] [--title <name>] [--ai gemini|claude|codex] [--no-ai] [--no-lyrics] [--video]');
         process.exit(1);
       }
       const inline = parseInlineOptions(args);
-      const url = args.find(a => a.startsWith('http') || a.startsWith('spotify:'));
+      const url = findSourceUrl(args);
       if (!url) {
-        console.error('No Spotify URL found in arguments');
+        console.error('No Spotify or YouTube URL found in arguments');
         process.exit(1);
       }
       showBanner();
@@ -655,7 +789,7 @@ async function execCommand(cmdArgs) {
 
     case 'playlist': {
       if (args.length < 1) {
-        console.error('Usage: songhero -- playlist <spotify_playlist_url> [--gemini] [--lyrics]');
+        console.error('Usage: songhero -- playlist <spotify_playlist_url> [--ai gemini|claude|codex] [--no-ai] [--no-lyrics]');
         process.exit(1);
       }
       const inline = parseInlineOptions(args);
@@ -736,14 +870,16 @@ async function main() {
 
   const url = args[0];
   const options = buildSession(parseInlineOptions(args));
-  
-  const outputIdx = args.indexOf('--output');
-  if (outputIdx !== -1) options.outputBase = args[outputIdx + 1];
 
   showBanner();
 
-  // Auto-detect: playlist vs track
-  if (url.includes('playlist')) {
+  if (isYouTubeUrl(url) && /[?&]list=|\/playlist/.test(url) && !/[?&]v=|youtu\.be\//.test(url)) {
+    console.error('YouTube playlists are not supported yet — pass a single video link.');
+    process.exit(1);
+  }
+
+  // Auto-detect: playlist vs track (a YouTube watch link with &list= is one video)
+  if (!isYouTubeUrl(url) && url.includes('playlist')) {
     await processPlaylist(url, options);
   } else {
     const ok = await runPipeline(url, options);
