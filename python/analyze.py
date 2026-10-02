@@ -7,7 +7,7 @@ import numpy as np
 warnings.filterwarnings("ignore")
 
 import librosa
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, butter, sosfilt
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 RESOLUTION = 480  # ticks per beat
@@ -303,6 +303,16 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
     difficulties = generate_all_difficulties(onset_notes, beat_times, sections, 
                                               tempo, fret_map, ai_suggestions, duration)
     
+    # Bass track: detect low-frequency onsets and generate bass difficulties
+    print("Detecting bass onsets...", file=sys.stderr)
+    bass_onsets = detect_bass_onsets(y_harm, sr)
+    print(f"  Bass onsets: {len(bass_onsets)} (of {len(onset_notes)} total)", file=sys.stderr)
+    bass_difficulties = generate_bass_difficulties(
+        onset_notes, bass_onsets, beat_times, sections,
+        tempo, fret_map, ai_suggestions, duration
+    )
+    difficulties.update(bass_difficulties)
+    
     # Build tempo map from actual beat intervals
     tempo_map = []
     if len(beat_times) >= 2:
@@ -336,6 +346,7 @@ def analyze_audio(filepath, gemini_key=None, metadata=None, lyrics_file=None):
         "difficulties": difficulties,
         "beat_times": [float(t) for t in beat_times],
         "onset_count": len(onset_notes),
+        "bass_onset_count": len(bass_onsets),
         "ai_enhanced": ai_suggestions is not None,
         "ai_sections": ai_suggestions.get("sections") if ai_suggestions else None,
         "lyrics": lyrics if lyrics else [],
@@ -679,6 +690,181 @@ def generate_all_difficulties(onset_notes, beat_times, sections, tempo, fret_map
         beat_in_sec += 1
     easy.sort(key=lambda n:(n["tick"],n["fret"]))
     difficulties["EasySingle"] = easy
+    
+    return difficulties
+
+def detect_bass_onsets(y, sr, hop_length=512, cutoff_hz=220):
+    """Detect onsets in the bass register (low-pass filtered harmonic content).
+    Bass root notes produce the strongest low-frequency attacks, which guitars
+    and cymbals don't contribute to."""
+    sos = butter(6, cutoff_hz / (sr / 2.0), btype='low', output='sos')
+    y_low = sosfilt(sos, y)
+    onset_env = librosa.onset.onset_strength(y=y_low, sr=sr, hop_length=hop_length,
+                                             aggregate=np.mean)
+    onset_frames = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr,
+                                              hop_length=hop_length, backtrack=True)
+    return librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
+
+def generate_bass_difficulties(onset_notes, bass_onsets, beat_times, sections, tempo, fret_map, ai_suggestions, duration):
+    """Generate bass (5-lane) difficulties.
+    Bass follows the low-frequency onsets: single notes on the low frets,
+    occasional octave double-stops, and long natural sustains."""
+    
+    res = RESOLUTION
+    use_16th = tempo > 140
+    steps_per_beat = 4 if use_16th else 2
+    avg_beat_interval = 60.0 / tempo if len(beat_times) < 2 else np.mean(np.diff(beat_times[:min(50, len(beat_times))]))
+    
+    # Bass weights favor low frets (green/red/yellow); blue only on harder diffs
+    bass_weights = [5, 4, 3, 1, 0]
+    
+    # Build subdivision grid from beats
+    grid_times = []
+    is_beat = []
+    
+    if len(beat_times) >= 2:
+        tail_interval = np.mean(np.diff(beat_times[-10:])) if len(beat_times) >= 10 else (60.0 / tempo)
+        for i in range(len(beat_times) - 1):
+            bt_start = beat_times[i]
+            bt_end = beat_times[i + 1]
+            subdiv_spacing = (bt_end - bt_start) / steps_per_beat
+            for step in range(steps_per_beat):
+                grid_times.append(bt_start + step * subdiv_spacing)
+                is_beat.append(step == 0)
+        
+        t = beat_times[-1]
+        tail_spacing = tail_interval / steps_per_beat
+        step_idx = len(is_beat)
+        while t < duration + tail_spacing:
+            grid_times.append(t)
+            is_beat.append(step_idx % steps_per_beat == 0)
+            t += tail_spacing
+            step_idx += 1
+    else:
+        base_spacing = (60.0 / tempo) / steps_per_beat
+        t = 0.0
+        while t < duration + base_spacing:
+            grid_times.append(t)
+            is_beat.append(len(is_beat) % steps_per_beat == 0)
+            t += base_spacing
+    
+    # Mark grid positions that fall on bass onsets
+    grid_has_bass = [False] * len(grid_times)
+    for bt in bass_onsets:
+        idx = min(range(len(grid_times)), key=lambda i: abs(grid_times[i] - bt))
+        if abs(grid_times[idx] - bt) < 0.08:
+            grid_has_bass[idx] = True
+    
+    def bass_fret_at(time):
+        d_best, f_best = 99, 0
+        for o in onset_notes:
+            d = abs(o["time"] - time)
+            if d < d_best:
+                d_best, f_best = d, fret_map.get(o["pitch_class"], 0)
+        return f_best if d_best < 0.15 else None
+    
+    def sec_energy(t):
+        for sec in sections:
+            if sec["start"] <= t < sec["end"]:
+                dur = max(sec["end"] - sec["start"], 0.5)
+                count = sum(1 for bt in bass_onsets if sec["start"] <= bt < sec["end"])
+                return min(10.0, 3.0 + (count / dur) * 2.5)
+        return 5.0
+    
+    def sustain_len(mult):
+        return int(avg_beat_interval * mult * res * tempo / 60.0)
+    
+    def is_eighth(i):
+        if steps_per_beat == 4:
+            return i % 2 == 0  # 16th grid → every other position is an eighth
+        return True            # 8th grid → every position already is
+    
+    difficulties = {}
+    max_frets = {"EasyDoubleBass": 2, "MediumDoubleBass": 2, "HardDoubleBass": 3, "ExpertDoubleBass": 3}
+    
+    # Expert: full bass groove on eighths, occasional octave double-stops
+    exp = []
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        if not is_eighth(i): continue
+        ene = sec_energy(time)
+        has = grid_has_bass[i]
+        if not has and _section_rand("bx", i, 1) > 0.30 * (ene / 5.0):
+            continue
+        fret = bass_fret_at(time)
+        fret = min(fret, 3) if fret is not None else _deterministic_fret("bx", i, 1, bass_weights, 3)
+        tick = time_to_tick(time, tempo)
+        length = sustain_len(1.0) if has and _section_rand("bx", i, 2) < 0.35 * (ene / 5.0) else 0
+        exp.append({"tick": tick, "fret": fret, "length": length})
+        if has and _section_rand("bx", i, 3) < 0.08:
+            exp.append({"tick": tick, "fret": min((fret + 2) % 5, 3), "length": 0})
+    exp.sort(key=lambda n: (n["tick"], n["fret"]))
+    difficulties["ExpertDoubleBass"] = exp
+    
+    # Hard: eighths only where the bass actually plays, some fills on beats
+    hrd = []
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        if not is_eighth(i): continue
+        ene = sec_energy(time)
+        has = grid_has_bass[i]
+        if not has:
+            if not is_beat[i] or _section_rand("bh", i, 1) > 0.20 * (ene / 5.0):
+                continue
+        fret = bass_fret_at(time)
+        fret = min(fret, 3) if fret is not None else _deterministic_fret("bh", i, 1, bass_weights, 3)
+        tick = time_to_tick(time, tempo)
+        length = sustain_len(1.0) if _section_rand("bh", i, 2) < 0.40 * (ene / 5.0) else 0
+        hrd.append({"tick": tick, "fret": fret, "length": length})
+        if has and _section_rand("bh", i, 3) < 0.04:
+            hrd.append({"tick": tick, "fret": min((fret + 2) % 5, 3), "length": 0})
+    hrd.sort(key=lambda n: (n["tick"], n["fret"]))
+    difficulties["HardDoubleBass"] = hrd
+    
+    # Medium: beats only, low frets, no double-stops, more sustains
+    med = []
+    beat_idx = 0
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        if not is_beat[i]: continue
+        ene = sec_energy(time)
+        has = grid_has_bass[i]
+        note_prob = 0.55 + (ene / 10.0) * 0.45
+        if not has and _section_rand("bm", beat_idx, 4) > note_prob:
+            beat_idx += 1
+            continue
+        fret = bass_fret_at(time)
+        fret = min(fret, 2) if fret is not None else _deterministic_fret("bm", beat_idx, 1, bass_weights, 2)
+        tick = time_to_tick(time, tempo)
+        length = sustain_len(1.5) if _section_rand("bm", beat_idx, 2) < 0.50 * (ene / 5.0) else 0
+        med.append({"tick": tick, "fret": fret, "length": length})
+        beat_idx += 1
+    med.sort(key=lambda n: (n["tick"], n["fret"]))
+    difficulties["MediumDoubleBass"] = med
+    
+    # Easy: every other beat, heavy sustains
+    easy = []
+    beat_idx = 0
+    for i, time in enumerate(grid_times):
+        if time > duration: break
+        if not is_beat[i]: continue
+        if beat_idx % 2 != 0:
+            beat_idx += 1
+            continue
+        ene = sec_energy(time)
+        has = grid_has_bass[i]
+        note_prob = 0.45 + (ene / 10.0) * 0.55
+        if not has and _section_rand("be", beat_idx, 4) > note_prob:
+            beat_idx += 1
+            continue
+        fret = bass_fret_at(time)
+        fret = min(fret, 2) if fret is not None else _deterministic_fret("be", beat_idx, 1, bass_weights, 2)
+        tick = time_to_tick(time, tempo)
+        length = sustain_len(2.0) if _section_rand("be", beat_idx, 2) < 0.65 * (ene / 5.0) else 0
+        easy.append({"tick": tick, "fret": fret, "length": length})
+        beat_idx += 1
+    easy.sort(key=lambda n: (n["tick"], n["fret"]))
+    difficulties["EasyDoubleBass"] = easy
     
     return difficulties
 
