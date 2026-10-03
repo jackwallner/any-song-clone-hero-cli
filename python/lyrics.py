@@ -1,121 +1,96 @@
 #!/usr/bin/env python3
-"""Fetch song lyrics with synced karaoke timestamps from LRCLIB, fallback to plain text APIs."""
+"""Fetch source-based synced lyrics, with an optional plain-text fallback."""
 
-import sys, json, urllib.request, urllib.parse, re
+import json
+import math
+import re
+import sys
+import urllib.parse
+
+from sources import fetch_json
 
 
-def fetch_lrclib(artist, title):
-    """Fetch synced LRC lyrics from LRCLIB (free karaoke timestamp API)."""
-    url = (
-        "https://lrclib.net/api/get?"
-        + urllib.parse.urlencode({"artist_name": artist, "track_name": title})
-    )
+def fetch_lrclib(artist: str, title: str):
+    url = "https://lrclib.net/api/get?" + urllib.parse.urlencode({"artist_name": artist, "track_name": title})
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "SongHero/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-        synced = data.get("syncedLyrics", "")
-        duration = data.get("duration", 0)
-        if synced and len(synced) > 20:
-            return {"lrc": synced, "duration": float(duration)}
-    except Exception:
+        data = fetch_json(url, limit=1024 * 1024)
+        synced = data.get("syncedLyrics")
+        duration = float(data.get("duration") or 0)
+        if isinstance(synced, str) and synced.strip() and math.isfinite(duration) and duration >= 0:
+            return {"lrc": synced, "duration": duration}
+    except (ValueError, OSError, TypeError):
         pass
     return None
 
 
-def parse_lrc(lrc_text):
-    """Parse LRC format into timed events: [mm:ss.xx]text"""
+def parse_lrc(lrc_text: str) -> list[dict]:
+    offset_match = re.search(r"\[offset:([+-]?\d+)\]", lrc_text, re.IGNORECASE)
+    offset = int(offset_match.group(1)) / 1000 if offset_match else 0
+    timestamp = re.compile(r"\[(\d+):(\d{1,2}(?:\.\d+)?)\]")
     events = []
-    pattern = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\](.*)")
-    for line in lrc_text.split("\n"):
-        match = pattern.match(line.strip())
-        if not match:
+    for line in lrc_text.splitlines():
+        matches = list(timestamp.finditer(line))
+        if not matches:
             continue
-        minutes = int(match.group(1))
-        seconds = float(match.group(2))
-        text = match.group(3).strip()
+        text = line[matches[-1].end():].strip()
         if not text:
             continue
-        time_sec = minutes * 60 + seconds
-        events.append({"time": round(time_sec, 2), "word": text})
-    events.sort(key=lambda e: e["time"])
+        for match in matches:
+            seconds = float(match.group(2))
+            time = int(match.group(1)) * 60 + seconds + offset
+            if seconds < 60 and math.isfinite(time) and time >= 0:
+                events.append({"time": round(time, 3), "word": text})
+    events.sort(key=lambda event: event["time"])
     return events
 
 
-def fetch_lyrics_ovh(artist, title):
-    """Plain text fallback from lyrics.ovh."""
-    url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(artist)}/{urllib.parse.quote(title)}"
+def fetch_lyrics_ovh(artist: str, title: str):
+    url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(artist, safe='')}/{urllib.parse.quote(title, safe='')}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "SongHero/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-        lyrics = data.get("lyrics", "")
-        if lyrics and len(lyrics) > 20:
-            return lyrics
-    except Exception:
-        pass
-    return None
+        data = fetch_json(url, limit=1024 * 1024)
+        lyrics = data.get("lyrics")
+        return lyrics if isinstance(lyrics, str) and lyrics.strip() else None
+    except (ValueError, OSError, TypeError):
+        return None
 
 
-def clean_plain_lyrics(raw_text):
-    """Clean up plain text lyrics into lines."""
-    skip_patterns = [
-        r"^\d+ contributors$",
-        r"^paroles de la chanson",
-        r"^lyrics powered by",
-        r"^\.\.\.$",
-        r"^you might also like",
-        r"^embed$",
-    ]
+def clean_plain_lyrics(raw_text: str) -> list[dict]:
+    skip = re.compile(r"^(?:\d+ contributors|paroles de la chanson.*|lyrics powered by.*|\.\.\.|you might also like|embed)$", re.IGNORECASE)
     lines = []
-    for line in raw_text.split("\n"):
-        stripped = line.strip()
-        if not stripped:
+    section, group = None, 0
+    for raw in raw_text.splitlines():
+        text = raw.strip()
+        if not text or skip.match(text):
             continue
-        if any(re.search(p, stripped, re.IGNORECASE) for p in skip_patterns):
+        header = re.fullmatch(r"\[([^\]]+)\]", text)
+        if header:
+            label = re.sub(r"\s+", "_", header.group(1).lower())
+            label = re.sub(r"_?\d+$", "", label)
+            if label in {"intro", "verse", "pre_chorus", "chorus", "bridge", "solo", "outro"}:
+                section = label
+                group += 1
             continue
-        lines.append({"text": stripped, "section": "verse"})
+        lines.append({"text": text, "section": section, "group": group})
     return lines
 
 
-def fetch_lyrics(artist, title):
-    """Fetch lyrics — prefers synced LRC, falls back to plain text."""
-
-    # Primary: LRCLIB synced karaoke lyrics
+def fetch_lyrics(artist: str, title: str) -> dict:
     lrc = fetch_lrclib(artist, title)
     if lrc:
         events = parse_lrc(lrc["lrc"])
         if events:
-            return {
-                "synced": True,
-                "source": "lrclib",
-                "lrc_duration": lrc["duration"],
-                "events": events,
-                "line_count": len(events),
-            }
-
-    # Fallback: lyrics.ovh plain text
+            return {"synced": True, "source": "lrclib", "lrc_duration": lrc["duration"],
+                    "events": events, "line_count": len(events)}
     raw = fetch_lyrics_ovh(artist, title)
     if raw:
         lines = clean_plain_lyrics(raw)
         if lines:
-            return {
-                "synced": False,
-                "source": "lyrics.ovh",
-                "lines": lines,
-                "line_count": len(lines),
-            }
-
+            return {"synced": False, "estimated": True, "source": "lyrics.ovh", "lines": lines, "line_count": len(lines)}
     return {"error": "No lyrics found for this song"}
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
+    if len(sys.argv) != 3:
         print(json.dumps({"error": "Usage: lyrics.py <title> <artist>"}))
         sys.exit(1)
-
-    title = sys.argv[1]
-    artist = sys.argv[2]
-
-    result = fetch_lyrics(artist, title)
-    print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps(fetch_lyrics(sys.argv[2], sys.argv[1]), ensure_ascii=False, allow_nan=False))

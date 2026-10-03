@@ -1,225 +1,153 @@
-# 🎸 Any Song Clone Hero CLI
+# SongHero
 
-Generate Clone Hero charts from **any Spotify link** — with AI-powered note generation, automatic difficulty scaling, and music video support.
+Generate Clone Hero practice charts from Spotify track links and public playlists. Local audio analysis creates four guitar difficulties. Gemini enhancement, background video, and browser cookies are optional and explicitly enabled.
 
-```
-songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini --video
-```
+These are automatically generated charts, not hand-authored guitar transcriptions. Use only recordings, video, and lyrics you have permission to download and use.
 
-## How It Works
+## Install
 
-1. **Resolve** — Extracts song metadata from Spotify (no API key needed)
-2. **Download** — Fetches audio + music video from YouTube via yt-dlp
-3. **Analyze** — AI-powered audio analysis using librosa + Gemini
-   - Beat & onset detection
-   - Pitch-to-fret mapping
-   - Section detection (verse, chorus, bridge)
-4. **Generate** — Creates `.chart` files with 4 difficulty levels
-5. **Package** — Outputs a complete Clone Hero song folder
+Supported: macOS, Linux, and Windows through WSL. Requires Node.js 18+, Python 3.9+, yt-dlp, ffmpeg, and ffprobe.
 
-## Difficulty Levels
-
-| Difficulty | Note Density | Orange Fret | Chords | Description |
-|-----------|-------------|-------------|--------|-------------|
-| **Easy** | 25% | No | No | Simple patterns on strong beats |
-| **Medium** | 50% | No | No | Faster, more notes, no orange |
-| **Hard** | 70% | Yes | Yes | Orange notes, some chords |
-| **Expert** | 90% | Yes | Yes | Dense, all notes, complex patterns |
-
-## Installation
-
-Supported platforms: **macOS** and **Linux**. On Windows, run SongHero inside
-WSL (see [Windows](#windows) below). Node.js 18+ and Python 3 are required.
-
-### Prerequisites
-
-The installer below sets all of this up for you. To do it by hand:
+On macOS, install [Homebrew](https://brew.sh) first. The installer checks dependencies, creates an isolated Python environment, installs the CLI, and verifies it before reporting success:
 
 ```bash
-# macOS
+curl -fsSL https://raw.githubusercontent.com/jackwallner/any-song-clone-hero-cli/main/landing/install.sh | bash -s -- --add-to-path
+```
+
+`--add-to-path` opts into updating your shell startup file, with a backup. Omit it to leave your shell configuration unchanged and use `~/.songhero/bin/songhero` directly. Reopen your terminal after installing with PATH setup.
+
+### From source
+
+```bash
+# macOS system tools
 brew install node python yt-dlp ffmpeg
 
-# Debian / Ubuntu (including WSL)
-sudo apt install -y nodejs npm python3 python3-venv ffmpeg
-node -v   # must be 18 or newer; if not, install Node 20 from https://deb.nodesource.com
-curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp
-chmod +x ~/.local/bin/yt-dlp
-
-# Python dependencies (Debian and Ubuntu refuse a plain pip install into the
-# system Python, so use a venv)
-python3 -m venv ~/.songhero/venv
-~/.songhero/venv/bin/pip install librosa soundfile numpy scipy
-```
-
-### Install SongHero
-
-The one-line installer works on macOS, Linux, and WSL. It installs Node, Python,
-ffmpeg, and yt-dlp, then verifies every dependency before it reports success:
-
-```bash
-curl -sSL https://jackwallner.com/songhero/install.sh | bash
-```
-
-To install from source instead:
-
-```bash
+# Clone and install
 git clone https://github.com/jackwallner/any-song-clone-hero-cli.git
 cd any-song-clone-hero-cli
-npm install
-chmod +x index.js
+npm ci
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+node index.js -- doctor
 ```
+
+On Debian/Ubuntu, install `nodejs npm python3 python3-venv ffmpeg`, ensure Node is at least 18, and install a current [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation). Do not install Python analysis packages into a system Python marked externally managed.
+
+SongHero prefers `.venv`, then the installer's `~/.songhero/venv`, then a compatible Python on PATH. `SONGHERO_PYTHON=/path/to/python` overrides interpreter selection. `npm test` uses the same selection.
 
 ### Windows
 
-SongHero is not a Windows-native program, and double-clicking `index.js` in
-Explorer will not work: Windows hands `.js` files to Windows Script Host, which
-chokes on the shebang and reports `Invalid character` at line 1, char 1. Use WSL
-instead, which gives you a real Linux environment inside Windows.
-
-1. In PowerShell as Administrator, run `wsl --install`
-2. Reboot, open the **Ubuntu** app, and set a username and password
-3. In the Ubuntu shell, run the installer:
-
-   ```bash
-   curl -sSL https://jackwallner.com/songhero/install.sh | bash
-   ```
-
-4. Reopen Ubuntu, then run `songhero <spotify_url>`
-
-A fresh WSL Ubuntu has no Node.js, so the installer adds it. If you see
-`env: 'node': No such file or directory`, you are on a build from before the
-installer did that: rerun the command above and it will repair the install.
-
-Charts land in your Linux home directory. Reach them from Windows Explorer by
-typing `\\wsl$` in the address bar.
-
-### Optional: Gemini AI Enhancement
-
-```bash
-export GEMINI_API_KEY="your-key-here"
-# Or create a .env file
-cp .env.example .env
-```
+Use WSL rather than double-clicking `index.js`, which invokes Windows Script Host, not Node. Install WSL with `wsl --install` in an administrator PowerShell, open Ubuntu, and run the installer there. Clone inside WSL to avoid Windows checkout issues. Reach Linux output from Explorer through `\\wsl$`.
 
 ## Usage
 
-```bash
-# Basic usage
-./index.js <spotify_url>
-
-# With AI enhancement + music video
-./index.js <spotify_url> --gemini --video
-
-# Full options
-./index.js <spotify_url> [options]
-
-Options:
-  --gemini          Use Gemini AI for enhanced note generation
-  --video           Force download music video
-  --no-video        Skip music video download
-  --output <dir>    Output directory (default: ~/Desktop/Clone Hero)
-  --keep-temp       Keep temporary files
-```
-
-### Examples
+From source, replace `songhero` with `node index.js`.
 
 ```bash
-# Quick chart (no AI, no video)
-./index.js https://open.spotify.com/track/3DrNvXNKo4cr8YAjxvjgnp
+# Track, local analysis, optional lyrics, no video
+songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b
 
-# Full experience
-./index.js spotify:track:0VjIjW4GlUZAMYd2vXMi3b --gemini --video
+# Audio-only, without lyric lookups
+songhero spotify:track:0VjIjW4GlUZAMYd2vXMi3b --no-lyrics
 
-# Custom output
-./index.js "https://open.spotify.com/track/..." --output ~/Documents/Charts
+# Require a compatible background video
+songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --video
+
+# Public playlist, custom output and delay
+songhero -- playlist https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M --output ~/Documents/Charts --rate-limit 5000
+
+# Interactive commands
+songhero -
+
+# Dependency diagnostics
+songhero -- doctor
 ```
+
+Track and playlist URLs are auto-detected. Spotify URIs, localized Spotify URLs, and command mode (`songhero -- generate <url>`) use the same options. Playlist scraping can only see tracks exposed by Spotify's public embed, not necessarily every track in a large playlist. Duplicate or unsupported embed entries are filtered.
+
+### Options
+
+| Option | Behavior |
+| --- | --- |
+| `--gemini`, `--no-gemini` | Optional AI enhancement. Off by default. |
+| `--lyrics`, `--no-lyrics` | Optional lyric lookup. On by default. |
+| `--video` | Require a compatible video; fail this track if unavailable. |
+| `--no-video` | No video download. Default. |
+| `--auto-video` | Try a suitable video, continue audio-only on failure. |
+| `--output <dir>` | Output root, defaults to `~/Desktop/Clone Hero`. |
+| `--rate-limit <ms>` | Nonnegative playlist delay, defaults to 5000, or 30000 with configured Gemini. |
+| `--skip-existing`, `--no-skip-existing` | Skip valid packages, or regenerate SongHero-owned packages. |
+| `--rewrite` | Replace this track's SongHero-owned package only after a new package validates. |
+| `--keep-temp` | Retain intermediate files on success or failure. Their location is printed. |
+| `--cookies-from-browser <browser>` | Explicitly permit yt-dlp to use that browser's session. No profile scanning by default. |
+| `--allow-duration-mismatch` | Accept a recording that differs significantly from Spotify's duration. |
+
+Conflicting flags, unknown flags, malformed URLs, missing option values, and invalid delays are errors. A playlist reports successes, skips, and failures; any failed track produces exit status 1. Success and skip use 0. Cancellation uses 130 and cleans temporary work unless `--keep-temp` was selected.
+
+### Gemini keys
+
+Gemini is never called by default, even if a key exists. Enable it with `--gemini` or interactive `gemini on`. API use may incur charges under your Google account. A missing key or unavailable model falls back to local analysis with a warning.
+
+```bash
+songhero -- keys                  # Status only, never prints the key
+songhero -- keys set gemini       # Hidden input, no key in shell history
+```
+
+Automation can supply `GEMINI_API_KEY` through its secret environment, or use `songhero -- keys set gemini --stdin` with a secret manager's output. Do not put a literal key in command arguments. Saved `.env` files have owner-only permissions. `GEMINI_MODEL` optionally overrides the configured model fallback list.
+
+### Interactive mode
+
+`generate`, `gen`, and `playlist` accept normal flags. Session settings include `gemini on|off`, `lyrics on|off`, `video on|off|auto`, `skip-existing on|off`, `rate-limit <ms>`, and `output "path with spaces"`. Use `options`, `keys`, `doctor`, `help`, and `exit`. Jobs are serialized, including pasted command sequences.
 
 ## Output
 
-Each song is saved as a Clone Hero-ready folder:
+New packages include the Spotify track ID in the folder name to distinguish recordings with identical titles:
 
-```
+```text
 ~/Desktop/Clone Hero/
-└── Artist - Song Name (SongHero AI)/
-    ├── notes.chart    # All 4 difficulties
-    ├── song.ini       # Song metadata
-    ├── song.opus      # High-quality audio
-    ├── album.jpg      # Album artwork
-    └── video.mp4      # Music video (if available)
+└── Artist - Song (SongHero 0VjIjW4GlUZAMYd2vXMi3b)/
+    ├── notes.chart       # Easy, Medium, Hard, Expert and available lyrics
+    ├── song.ini          # Metadata and duration
+    ├── song.opus         # Verified Ogg Opus audio
+    ├── .songhero.json    # Ownership, source URLs, configuration and file hashes
+    ├── album.jpg         # Optional download thumbnail
+    ├── lyrics.json       # Optional source lyrics, when included in the chart
+    └── video.mp4         # Optional verified H.264 background video
 ```
 
-Clone Hero picks the background video up automatically from the `video.mp4`
-filename. There is no `video = ` key in `song.ini`; the only video setting is
-the optional `video_start_time`.
+Rescan songs in Clone Hero. Video is recognized by its filename; `song.ini` does not need a `video =` setting.
 
-### Background video codec
+Packages are built in staging directories before publication. A failed rewrite preserves the previous package. SongHero never recursively replaces foreign folders or symlink destinations. Modified or incomplete owned packages require explicit regeneration. Older artist/title folders remain untouched; regenerated tracks use the new ID-based layout, so remove old duplicates yourself after checking them.
 
-Clone Hero only decodes **H.264** video. YouTube now serves most 1080p mp4
-streams as AV1, which Clone Hero loads as a black screen. SongHero prefers an
-H.264 stream and re-encodes with ffmpeg when only AV1/VP9 is available.
+All chart events share one consistent timing model. Audio-derived beats retain their measured positions instead of being interpreted under a different, noisy BPM map. Easy and Medium contain single notes with no orange fret; Hard and Expert add density and chords. Notes are deterministic for the same analyzed audio, configuration, and AI response. Live downloads and model responses can change.
 
-Charts made with an older SongHero build can be repaired in place:
+Lyrics come from LRCLIB, with plain-text lyrics.ovh as a fallback. Plain-text placement is estimated, not true karaoke synchronization. Lyrics with a conflicting reference duration are omitted with a warning. Gemini does not generate or repair lyric text.
+
+### Repair older background videos
 
 ```bash
-node scripts/fix-videos.js --dry-run     # list videos that need re-encoding
-node scripts/fix-videos.js               # re-encode them to H.264
+node scripts/fix-videos.js --dry-run "/path/to/Clone Hero"
 node scripts/fix-videos.js "/path/to/Clone Hero"
 ```
 
-## Troubleshooting
+The repair script validates H.264 MP4 output before replacing a source video. Unreadable or failed videos produce a nonzero exit status. Review the dry run before changing a library.
 
-### `env: 'node': No such file or directory`
-
-Two different problems print this, and the second line of the error tells them
-apart.
-
-**If that is the only line**, Node.js is not installed in the environment you
-are running from. A fresh WSL Ubuntu has no Node. Rerun the installer:
+## Verification and troubleshooting
 
 ```bash
-curl -sSL https://jackwallner.com/songhero/install.sh | bash
+npm test
+node index.js -- doctor
+node index.js --help
 ```
 
-**If it is followed by** `env: use -[v]S to pass options in shebang lines`,
-Node is beside the point: your copy of `index.js` has Windows (CRLF) line
-endings. The shebang then reads as `node\r` rather than `node`, and no
-installed Node will ever match it. This happens when the repository is cloned
-by Windows git, which rewrites line endings on checkout, and then run from WSL.
+The offline suite covers input validation, subprocess errors and cancellation, media integrity, atomic packaging and rewrites, playlists, lyrics, AI response validation, deterministic notes, timeline alignment, and real audio analysis/chart generation using synthetic recordings. It never uses live Gemini or browser cookies.
 
-Confirm it:
-
-```bash
-head -1 index.js | od -c | head -2      # a trailing \r means CRLF
-```
-
-Fix your existing copy:
-
-```bash
-sed -i 's/\r$//' index.js lib/*.js python/*.py
-```
-
-Or reinstall, which repairs line endings automatically:
-
-```bash
-curl -sSL https://jackwallner.com/songhero/install.sh | bash
-```
-
-Clone inside WSL rather than in Windows to avoid it entirely. Charts land in
-your Linux home directory; reach them from Explorer by typing `\\wsl$` in the
-address bar.
-
-### `Cannot find module 'dotenv'`
-
-The Node dependencies were never installed. Run `npm install` in the install
-directory (`~/.songhero` for installer-based installs).
-
-## Tech Stack
-
-- **CLI**: Node.js
-- **Audio Analysis**: Python (librosa, numpy, scipy)
-- **AI Enhancement**: Google Gemini 2.0 Flash
-- **Downloads**: yt-dlp + ffmpeg
-- **Chart Format**: Clone Hero `.chart` (MIDI-compatible)
+- **Missing Node/npm:** rerun the installer or install Node 18+ in the environment you use to run SongHero.
+- **Missing Python packages:** install `requirements.txt` into the selected venv, then rerun `doctor`.
+- **Windows `node\r` shebang error:** clone inside WSL or rerun the installer to repair LF line endings.
+- **Download failure:** update yt-dlp. Use explicit browser-cookie access only if public access fails and you authorize using that session.
+- **Duration mismatch:** check that the selected YouTube recording is the intended version before accepting the override.
+- **Stale song lock:** after confirming no SongHero process is active, remove only the lock file named in the error.
 
 ## License
 

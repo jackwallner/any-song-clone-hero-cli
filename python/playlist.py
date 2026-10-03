@@ -1,120 +1,75 @@
 #!/usr/bin/env python3
-"""Scrape track listing from a Spotify playlist embed page.
-Extracts the entity JSON blob from the Next.js __NEXT_DATA__ script."""
-import sys, json, re, ssl, urllib.request
+"""Resolve playable tracks exposed by Spotify's public playlist embed."""
 
-ssl._create_default_https_context = ssl._create_unverified_context
+import json
+import sys
+
+from sources import fetch_text, parse_spotify_input
+from spotify import SpotifyPage
 
 
 def find_tracklist(obj):
-    """Recursively find the trackList array in a nested JSON object."""
     if isinstance(obj, dict):
-        if "trackList" in obj and isinstance(obj["trackList"], list):
-            return obj["trackList"]
-        for v in obj.values():
-            result = find_tracklist(v)
-            if result:
-                return result
+        if isinstance(obj.get("trackList"), list):
+            return obj
+        children = obj.values()
+    elif isinstance(obj, list):
+        children = obj
+    else:
+        return None
+    for child in children:
+        result = find_tracklist(child)
+        if result is not None:
+            return result
     return None
 
 
-def resolve_playlist(url):
-    playlist_id = None
-    patterns = [
-        r"spotify:playlist:(\w+)",
-        r"open\.spotify\.com/playlist/(\w+)",
-        r"play\.spotify\.com/playlist/(\w+)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, url)
-        if m:
-            playlist_id = m.group(1)
-            break
-
-    if not playlist_id:
-        print(json.dumps({"error": "Could not extract playlist ID from URL"}))
-        sys.exit(1)
-
-    embed_url = f"https://open.spotify.com/embed/playlist/{playlist_id}"
-    req = urllib.request.Request(
-        embed_url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        print(json.dumps({"error": f"Failed to fetch playlist page: {e}"}))
-        sys.exit(1)
-
-    # Find the script tag containing trackList data
-    scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL)
-    tracklist = None
-    playlist_name = "Playlist"
-
-    for script in scripts:
-        if "trackList" not in script or len(script) < 1000:
+def parse_playlist_page(html: str) -> dict:
+    page = SpotifyPage()
+    page.feed(html)
+    entity = None
+    for script in page.scripts:
+        try:
+            entity = find_tracklist(json.loads(script))
+        except (ValueError, RecursionError):
             continue
-        json_start = script.find("{")
-        json_end = script.rfind("}") + 1
-        if json_start < 0 or json_end <= json_start:
+        if entity is not None:
+            break
+    if entity is None:
+        raise ValueError("Could not find a public Spotify playlist track list")
+    tracks, seen = [], set()
+    skipped = 0
+    for item in entity["trackList"]:
+        if not isinstance(item, dict):
+            skipped += 1
             continue
         try:
-            data = json.loads(script[json_start:json_end])
-        except json.JSONDecodeError:
+            track = parse_spotify_input(item.get("uri", ""), "track")
+        except ValueError:
+            skipped += 1
             continue
-
-        tl = find_tracklist(data)
-        if tl:
-            tracklist = tl
-
-            # Find playlist name in the same data
-            def find_name(obj):
-                if isinstance(obj, dict):
-                    if "name" in obj and isinstance(obj["name"], str) and "trackList" in obj:
-                        return obj["name"]
-                    for v in obj.values():
-                        r = find_name(v)
-                        if r:
-                            return r
-                return None
-
-            name = find_name(data)
-            if name:
-                playlist_name = name
-            break
-
-    if not tracklist:
-        print(json.dumps({"error": "Could not find track list in embed page"}))
-        sys.exit(1)
-
-    tracks = []
-    for item in tracklist:
-        if not isinstance(item, dict):
+        if track["id"] in seen:
+            skipped += 1
             continue
-        uri = item.get("uri", "")
-        track_id = uri.replace("spotify:track:", "") if uri else ""
-        tracks.append({
-            "name": item.get("title", "Unknown"),
-            "artist": item.get("subtitle", "Unknown"),
-            "spotify_url": f"https://open.spotify.com/track/{track_id}" if track_id else "",
-            "duration_ms": item.get("duration", 0),
-        })
+        seen.add(track["id"])
+        duration = item.get("duration", 0)
+        tracks.append({"name": item.get("title") or "Unknown", "artist": item.get("subtitle") or "Unknown",
+                       "spotify_url": track["url"], "duration_ms": duration if isinstance(duration, (int, float)) else 0})
+    return {"playlist_name": entity.get("name") or page.meta.get("og:title") or "Playlist",
+            "track_count": len(tracks), "skipped_count": skipped, "tracks": tracks}
 
-    result = {
-        "playlist_name": playlist_name,
-        "track_count": len(tracks),
-        "tracks": tracks,
-    }
-    print(json.dumps(result, ensure_ascii=False))
+
+def resolve_playlist(url: str) -> dict:
+    playlist = parse_spotify_input(url, "playlist")
+    html = fetch_text(f"https://open.spotify.com/embed/playlist/{playlist['id']}", content_type="text/html")
+    return parse_playlist_page(html)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "Usage: playlist.py <spotify_playlist_url>"}))
+    try:
+        if len(sys.argv) != 2:
+            raise ValueError("Usage: playlist.py <spotify_playlist_url>")
+        print(json.dumps(resolve_playlist(sys.argv[1]), ensure_ascii=False, allow_nan=False))
+    except Exception as error:
+        print(json.dumps({"error": str(error)}))
         sys.exit(1)
-    resolve_playlist(sys.argv[1])

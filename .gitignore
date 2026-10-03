@@ -1,4 +1,6 @@
 node_modules/
+.venv/
+venv/
 output/
 *.opus
 *.mp3

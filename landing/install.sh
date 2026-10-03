@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
+
+ADD_TO_PATH=0
+for arg in "$@"; do
+  case "$arg" in
+    --add-to-path) ADD_TO_PATH=1 ;;
+    *) printf 'Usage: install.sh [--add-to-path]\n' >&2; exit 1 ;;
+  esac
+done
+TMP_CLONE=""
+TMP_DOWNLOAD=""
+trap '[ -z "$TMP_CLONE" ] || rm -rf "$TMP_CLONE"; [ -z "$TMP_DOWNLOAD" ] || rm -rf "$TMP_DOWNLOAD"' EXIT
 
 # ── SongHero Installer ──
-# curl -sSL https://songhero.jackwallner.com/install.sh | bash
+# curl -fsSL https://raw.githubusercontent.com/jackwallner/any-song-clone-hero-cli/main/landing/install.sh | bash -s -- --add-to-path
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,7 +33,7 @@ GEMINI_KEY="${GEMINI_API_KEY:-}"
 
 banner() {
   echo ""
-  echo -e "${PURPLE}${BOLD}   🎸  SongHero — AI Clone Hero Charts  🎸${NC}"
+  echo -e "${PURPLE}${BOLD}   SongHero: Clone Hero Charts${NC}"
   echo -e "   ${CYAN}https://songhero.jackwallner.com${NC}"
   echo ""
 }
@@ -85,14 +96,14 @@ pkg_install() {
 # ── Homebrew (macOS only) ──
 if [ "$OS" = "Darwin" ]; then
   if ! have brew; then
-    warn "Homebrew not found. Installing..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
-    ok "Homebrew installed"
+    die "Homebrew is required on macOS. Install it from https://brew.sh, then rerun this installer."
   else
     ok "Homebrew ready"
   fi
 fi
+
+have curl || pkg_install curl ca-certificates || true
+have curl || die "curl is required. Install it, then rerun this script."
 
 # ── Node.js ──
 # The CLI is a Node program with a `#!/usr/bin/env node` shebang. Without Node
@@ -128,7 +139,7 @@ else
       # Ubuntu 22.04 and older ship Node 12, which cannot run the CLI.
       warn "Distro Node is too old. Installing Node 20 from NodeSource..."
       pkg_install ca-certificates curl gnupg || true
-      curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null 2>&1 || true
+      curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO bash - >/dev/null 2>&1 || true
       $SUDO apt-get install -y -qq nodejs || true
     fi
   fi
@@ -139,6 +150,8 @@ else
     die "Could not install Node ${NODE_MIN}+. Install it manually, then rerun this script."
   fi
 fi
+have npm || { if [ "$OS" = "Darwin" ]; then brew install node; else pkg_install npm; fi; }
+have npm || die "npm is required. Install it, then rerun this script."
 
 # ── Python 3 ──
 step "Installing Python 3"
@@ -146,12 +159,17 @@ if ! have python3 && ! have python; then
   if [ "$OS" = "Darwin" ]; then
     brew install python || true
   else
-    pkg_install python3 python3-pip python3-venv || true
+    case "$PKG" in
+      apt) pkg_install python3 python3-pip python3-venv || true ;;
+      dnf) pkg_install python3 python3-pip || true ;;
+      pacman) pkg_install python python-pip || true ;;
+    esac
   fi
 fi
 have python3 || have python || die "Python 3 not found and could not be installed."
 PYTHON="$(command -v python3 || command -v python)"
-ok "Python: $($PYTHON --version 2>&1)"
+"$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' || die "Python 3.9+ is required."
+ok "Python: $("$PYTHON" --version 2>&1)"
 
 # ── ffmpeg ──
 step "Installing ffmpeg"
@@ -163,7 +181,7 @@ else
   else
     pkg_install ffmpeg || true
   fi
-  have ffmpeg && ok "ffmpeg installed" || warn "ffmpeg missing — audio/video conversion will fail"
+  have ffmpeg && ok "ffmpeg installed" || die "ffmpeg is missing. Install it before continuing."
 fi
 
 # ── Python analysis dependencies (isolated venv) ──
@@ -178,12 +196,7 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
     "$PYTHON" -m venv "$VENV_DIR" || die "Could not create a Python venv at $VENV_DIR"
   fi
 fi
-"$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip >/dev/null 2>&1 || true
-if "$VENV_DIR/bin/python" -m pip install --quiet librosa soundfile numpy scipy; then
-  ok "librosa, soundfile, numpy, scipy installed"
-else
-  die "Python dependency install failed. Rerun: $VENV_DIR/bin/pip install librosa soundfile numpy scipy"
-fi
+ok "Python virtual environment ready"
 
 # ── yt-dlp ──
 # Distro yt-dlp packages go stale within weeks and then fail on every YouTube
@@ -192,13 +205,17 @@ step "Installing yt-dlp"
 if [ "$OS" = "Darwin" ] && have brew; then
   have yt-dlp && ok "yt-dlp already installed" || { brew install yt-dlp && ok "yt-dlp installed"; }
 else
-  if curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "$BIN_DIR/yt-dlp"; then
-    chmod +x "$BIN_DIR/yt-dlp"
-    ok "yt-dlp installed to $BIN_DIR"
+  TMP_DOWNLOAD="$(mktemp -d)"
+  if curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "$TMP_DOWNLOAD/yt-dlp" \
+    && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS -o "$TMP_DOWNLOAD/SHA2-256SUMS" \
+    && "$PYTHON" -c 'import hashlib, pathlib, sys; p=pathlib.Path(sys.argv[1]); expected=next((line.split()[0] for line in (p/"SHA2-256SUMS").read_text().splitlines() if line.split()[-1] == "yt-dlp"), ""); sys.exit(0 if expected and hashlib.sha256((p/"yt-dlp").read_bytes()).hexdigest() == expected else 1)' "$TMP_DOWNLOAD"; then
+    chmod +x "$TMP_DOWNLOAD/yt-dlp"
+    mv "$TMP_DOWNLOAD/yt-dlp" "$BIN_DIR/yt-dlp"
+    ok "yt-dlp downloaded and checksum verified"
   elif have yt-dlp; then
-    warn "Download failed; using the yt-dlp already on PATH"
+    warn "Verified download failed; using the yt-dlp already on PATH"
   else
-    die "Could not install yt-dlp"
+    die "Could not download and verify yt-dlp"
   fi
 fi
 
@@ -209,7 +226,9 @@ have git || die "git not found. Install git, then rerun this script."
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   info "Updating existing install..."
-  git -C "$INSTALL_DIR" pull --rebase --quiet && ok "Updated" || warn "Update failed, continuing"
+  [ "$(git -C "$INSTALL_DIR" remote get-url origin)" = "$REPO" ] || die "The existing install belongs to another repository."
+  git -C "$INSTALL_DIR" diff --quiet && git -C "$INSTALL_DIR" diff --cached --quiet || die "The existing install has local changes. Preserve them before updating."
+  git -C "$INSTALL_DIR" pull --ff-only --quiet && ok "Updated" || die "Update failed. The previous install was preserved."
 else
   info "Cloning repository..."
   # $INSTALL_DIR already holds bin/ and venv/, so clone beside it and move in.
@@ -238,8 +257,13 @@ if head -1 "$INSTALL_DIR/index.js" | grep -q $'\r'; then
 fi
 
 info "Installing Node dependencies..."
-( cd "$INSTALL_DIR" && npm install --omit=dev --silent ) && ok "Node dependencies installed" \
-  || die "npm install failed. Rerun: cd $INSTALL_DIR && npm install"
+( cd "$INSTALL_DIR" && npm ci --omit=dev --silent ) && ok "Node dependencies installed" \
+  || die "npm ci failed. Rerun: cd $INSTALL_DIR && npm ci"
+
+info "Installing Python analysis dependencies..."
+"$VENV_DIR/bin/python" -m pip install --quiet -r "$INSTALL_DIR/requirements.txt" \
+  && ok "Python analysis dependencies installed" \
+  || die "Python dependency install failed. Rerun: $VENV_DIR/bin/python -m pip install -r $INSTALL_DIR/requirements.txt"
 
 # ── songhero launcher ──
 # A wrapper rather than a symlink to index.js: it can say what is missing
@@ -250,10 +274,10 @@ cat > "$BIN_DIR/songhero" <<'LAUNCHER'
 SONGHERO_HOME="$HOME/.songhero"
 if ! command -v node &>/dev/null; then
   echo "songhero: Node.js is not installed or not on your PATH." >&2
-  echo "  Reinstall with: curl -sSL https://songhero.jackwallner.com/install.sh | bash" >&2
+  echo "  Reinstall with: curl -fsSL https://raw.githubusercontent.com/jackwallner/any-song-clone-hero-cli/main/landing/install.sh | bash" >&2
   exit 127
 fi
-if [ -x "$SONGHERO_HOME/venv/bin/python" ]; then
+if [ -z "${SONGHERO_PYTHON:-}" ] && [ -x "$SONGHERO_HOME/venv/bin/python" ]; then
   export SONGHERO_PYTHON="$SONGHERO_HOME/venv/bin/python"
 fi
 export PATH="$SONGHERO_HOME/bin:$PATH"
@@ -265,28 +289,24 @@ ok "songhero command linked"
 # ── PATH setup ──
 step "Setting up PATH"
 SHELL_RC=""
-case "$SHELL" in
+case "${SHELL:-/bin/sh}" in
   */zsh)  SHELL_RC="$HOME/.zshrc" ;;
   */bash) SHELL_RC="$HOME/.bashrc" ;;
   *)      SHELL_RC="$HOME/.profile" ;;
 esac
 
 PATH_LINE="export PATH=\"\$HOME/.songhero/bin:\$PATH\""
-if ! grep -qF "$PATH_LINE" "$SHELL_RC" 2>/dev/null; then
-  {
-    echo ""
-    echo "# SongHero"
-    echo "$PATH_LINE"
-  } >> "$SHELL_RC"
-  ok "Added to $SHELL_RC"
+if [ "$ADD_TO_PATH" = "1" ]; then
+  if ! grep -qF "$PATH_LINE" "$SHELL_RC" 2>/dev/null; then
+    [ ! -f "$SHELL_RC" ] || cp -p "$SHELL_RC" "$SHELL_RC.songhero.bak"
+    printf '\n# SongHero\n%s\n' "$PATH_LINE" >> "$SHELL_RC"
+    ok "Added to $SHELL_RC (existing file backed up)"
+  else
+    ok "Already in $SHELL_RC"
+  fi
 else
-  ok "Already in $SHELL_RC"
-fi
-# Drop the pre-bin/ PATH entry older installs wrote.
-if [ -f "$SHELL_RC" ] && grep -qF 'export PATH="$HOME/.songhero:$PATH"' "$SHELL_RC" 2>/dev/null; then
-  TMP_RC="$(mktemp)"
-  grep -vF 'export PATH="$HOME/.songhero:$PATH"' "$SHELL_RC" > "$TMP_RC" && mv "$TMP_RC" "$SHELL_RC"
-  info "Removed the old PATH entry"
+  info "Shell startup files unchanged. Add to PATH yourself or rerun with --add-to-path."
+  info "$PATH_LINE"
 fi
 export PATH="$BIN_DIR:$PATH"
 
@@ -296,8 +316,8 @@ if [ -n "$GEMINI_KEY" ]; then
   ok "GEMINI_API_KEY detected in environment"
 else
   warn "No GEMINI_API_KEY set"
-  info "Get a free key at: ${CYAN}https://aistudio.google.com/apikey${NC}"
-  info "Then run: ${CYAN}export GEMINI_API_KEY=\"your-key-here\"${NC}"
+  info "Gemini is optional and disabled by default. API use may incur charges."
+  info "To configure a key, run: ${CYAN}$BIN_DIR/songhero -- keys set gemini${NC}"
 fi
 
 # ── Verify ──
@@ -306,13 +326,16 @@ fi
 step "Verifying install"
 PROBLEMS=0
 check() {
-  if eval "$2" >/dev/null 2>&1; then ok "$1"; else fail "$1"; PROBLEMS=$((PROBLEMS + 1)); fi
+  local label="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then ok "$label"; else fail "$label"; PROBLEMS=$((PROBLEMS + 1)); fi
 }
-check "node $(node -v 2>/dev/null)"        "node -e 'process.exit(0)'"
-check "ffmpeg"                              "command -v ffmpeg"
-check "yt-dlp"                              "command -v yt-dlp"
-check "python analysis deps"                "\"$VENV_DIR/bin/python\" -c 'import librosa, numpy, scipy, soundfile'"
-check "songhero launches"                   "\"$BIN_DIR/songhero\" --help"
+check "node $(node -v 2>/dev/null)" node -e 'process.exit(0)'
+check "ffmpeg" ffmpeg -version
+check "ffprobe" ffprobe -version
+check "yt-dlp" yt-dlp --ignore-config --version
+check "python analysis deps" "$VENV_DIR/bin/python" -c 'import librosa, numpy, scipy, soundfile'
+check "songhero launches" "$BIN_DIR/songhero" --help
 
 if [ "$PROBLEMS" -gt 0 ]; then
   echo ""
@@ -325,11 +348,15 @@ echo -e " ${GREEN}${BOLD}╭─────────────────�
 echo -e " ${GREEN}${BOLD}│${NC}        🎸  SongHero is ready!  🎸          ${GREEN}${BOLD}│${NC}"
 echo -e " ${GREEN}${BOLD}╰─────────────────────────────────────────────╯${NC}"
 echo ""
-info "Restart your terminal or run: ${CYAN}source $SHELL_RC${NC}"
+if [ "$ADD_TO_PATH" = "1" ]; then
+  info "Restart your terminal or run: ${CYAN}source $SHELL_RC${NC}"
+else
+  info "Run directly: ${CYAN}$BIN_DIR/songhero${NC}"
+fi
 echo ""
 info "Try it:"
-echo -e "   ${BOLD}songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b --gemini${NC}"
+echo -e "   ${BOLD}songhero https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b${NC}"
 echo ""
 info "For music videos:"
-echo -e "   ${BOLD}songhero https://open.spotify.com/track/... --gemini --video${NC}"
+echo -e "   ${BOLD}songhero https://open.spotify.com/track/... --video${NC}"
 echo ""

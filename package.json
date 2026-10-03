@@ -7,7 +7,10 @@
     "songhero": "./index.js"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node scripts/test.js",
+    "test:node": "node --test test/*.test.js",
+    "doctor": "node index.js -- doctor"
   },
   "keywords": [
     "clone-hero",

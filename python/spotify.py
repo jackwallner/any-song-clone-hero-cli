@@ -1,90 +1,70 @@
 #!/usr/bin/env python3
-"""Scrape track metadata from the public Spotify track page meta tags.
-No API keys required — parses og: and music: meta tags from the HTML."""
-import sys, json, re, ssl, urllib.request
+"""Resolve public Spotify track metadata without a Spotify API key."""
 
-ssl._create_default_https_context = ssl._create_unverified_context
+from html.parser import HTMLParser
+import json
+import re
+import sys
+
+from sources import fetch_text, parse_spotify_input
 
 
-def resolve_spotify(url):
-    track_id = None
-    patterns = [
-        r"spotify:track:(\w+)",
-        r"open\.spotify\.com/track/(\w+)",
-        r"play\.spotify\.com/track/(\w+)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, url)
-        if m:
-            track_id = m.group(1)
-            break
+class SpotifyPage(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.meta: dict[str, str] = {}
+        self.scripts: list[str] = []
+        self._script = None
 
-    if not track_id:
-        print(json.dumps({"error": "Could not extract track ID from URL"}))
-        sys.exit(1)
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        attributes = dict(attrs)
+        if tag == "meta":
+            key = attributes.get("property") or attributes.get("name")
+            if key and attributes.get("content") is not None:
+                self.meta[key] = attributes["content"].strip()
+        if tag == "script":
+            self._script = []
 
-    track_url = f"https://open.spotify.com/track/{track_id}"
-    req = urllib.request.Request(
-        track_url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        },
-    )
+    def handle_data(self, data: str) -> None:
+        if self._script is not None:
+            self._script.append(data)
 
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        print(json.dumps({"error": f"Failed to fetch track page: {e}"}))
-        sys.exit(1)
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._script is not None:
+            self.scripts.append("".join(self._script))
+            self._script = None
 
-    def meta(pattern, group=1, default=""):
-        m = re.search(pattern, html)
-        return m.group(group).strip() if m else default
 
-    name = meta(r'<meta property="og:title" content="([^"]+)"')
-    if not name:
-        print(json.dumps({"error": "Could not find track title on page"}))
-        sys.exit(1)
+def parse_track_page(html: str, track_id: str) -> dict:
+    page = SpotifyPage()
+    page.feed(html)
+    name = page.meta.get("og:title", "")
+    description = page.meta.get("og:description", "")
+    parts = [part.strip() for part in description.split("·")]
+    if not name or not description or not parts[0]:
+        raise ValueError("Spotify page has no usable title or artist. The track may be unavailable.")
+    artist = parts[0]
+    album = parts[1] if len(parts) >= 4 else ""
+    release = page.meta.get("music:release_date", "") or (parts[-1] if len(parts) >= 4 else "")
+    year = re.search(r"\b(\d{4})\b", release)
+    duration = page.meta.get("music:duration", "")
+    duration_ms = round(float(duration) * 1000) if re.fullmatch(r"\d+(?:\.\d+)?", duration) else 0
+    return {"id": track_id, "name": name, "artist": artist, "artists": [artist],
+            "album": album, "album_art": page.meta.get("og:image", ""),
+            "year": year.group(1) if year else "", "duration_ms": duration_ms}
 
-    description = meta(r'<meta property="og:description" content="([^"]+)"')
-    artist = name
-    album = ""
-    year = ""
 
-    if description:
-        parts = [p.strip() for p in description.split("\u00b7")]
-        if len(parts) >= 4:
-            artist = parts[0]
-            album = parts[1]
-            year = parts[-1]
-        elif len(parts) >= 2:
-            artist = parts[0]
-
-    release_date = meta(r'<meta name="music:release_date" content="([^"]+)"')
-    if release_date and not year:
-        year = release_date[:4]
-
-    duration_s = meta(r'<meta name="music:duration" content="(\d+)"')
-    duration_ms = int(duration_s) * 1000 if duration_s else 0
-
-    album_art = meta(r'<meta property="og:image" content="([^"]+)"')
-
-    result = {
-        "id": track_id,
-        "name": name,
-        "artist": artist,
-        "artists": [artist],
-        "album": album,
-        "album_art": album_art,
-        "year": year,
-        "duration_ms": duration_ms,
-    }
-    print(json.dumps(result, ensure_ascii=False))
+def resolve_spotify(url: str) -> dict:
+    track = parse_spotify_input(url, "track")
+    html = fetch_text(track["url"], content_type="text/html")
+    return parse_track_page(html, track["id"])
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "Usage: spotify.py <spotify_url>"}))
+    try:
+        if len(sys.argv) != 2:
+            raise ValueError("Usage: spotify.py <spotify_url>")
+        print(json.dumps(resolve_spotify(sys.argv[1]), ensure_ascii=False, allow_nan=False))
+    except Exception as error:
+        print(json.dumps({"error": str(error)}))
         sys.exit(1)
-    resolve_spotify(sys.argv[1])

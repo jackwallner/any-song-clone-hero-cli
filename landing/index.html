@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SongHero — AI Clone Hero Charts From Any Song</title>
-  <meta name="description" content="Paste a Spotify link, get a fully playable Clone Hero chart. AI-powered note generation, 4 difficulties, synced lyrics, playlist mode, music video support.">
-  <meta property="og:title" content="SongHero — AI Clone Hero Charts From Any Song">
-  <meta property="og:description" content="Paste a Spotify link, get a Clone Hero chart instantly. Tracks, playlists, synced lyrics, AI enhancement.">
+  <title>SongHero: Clone Hero Practice Charts</title>
+  <meta name="description" content="Generate Clone Hero practice charts from Spotify links. Local audio analysis, four difficulties, public playlists, optional lyrics, video, and Gemini enhancement.">
+  <meta property="og:title" content="SongHero: Clone Hero Practice Charts">
+  <meta property="og:description" content="Generate Clone Hero practice charts with local audio analysis. Four difficulties, public playlists, and optional lyrics, video, and Gemini enhancement.">
   <meta property="og:type" content="website">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='28' font-size='28'>🎸</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -524,24 +524,24 @@
         GET A <span class="red">CLONE HERO</span> CHART.
       </h1>
       <p class="sub">
-        Give it a Spotify link. It downloads the audio, pulls synced lyrics, runs audio analysis, and builds a chart with 4 difficulties. Works on single tracks or full playlists.
+        Give it a Spotify link. Local audio analysis builds a practice chart with 4 difficulties. Add optional lyrics, video, or Gemini enhancement. Supports tracks and songs exposed by public playlist embeds.
       </p>
 
       <div class="terminal">
         <div class="terminal-bar">
           <span class="t-dot r"></span><span class="t-dot y"></span><span class="t-dot g"></span>
-          <span class="title">amplifier — songhero</span>
+          <span class="title">amplifier - songhero</span>
         </div>
         <div class="terminal-body">
           <span class="prompt">~ $ </span><span class="cmd">songhero</span> <span class="url-clr">https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M</span><br>
           <div class="out">
-            🎵 Playlist: Today's Top Hits (50 tracks)<br>
-            ⬇ Foo Fighters — New Way Home &nbsp;<span class="flag">--gemini</span> <span class="flag">--lyrics</span> <span class="flag">--video</span><br>
-            &nbsp;&nbsp;&nbsp;Downloading audio + music video...<br>
-            &nbsp;&nbsp;&nbsp;Fetched synced lyrics from LRCLIB...<br>
-            &nbsp;&nbsp;&nbsp;🤖 Gemini enhancing chart patterns & lyrics...<br>
-            &nbsp;&nbsp;&nbsp;✓ Tempo: 172 BPM · Key: E · Sections: 32<br>
-            ✅ Saved to ~/Desktop/Clone Hero/Foo Fighters — New Way Home (SongHero AI)/
+            Playlist: Example playlist (tracks exposed by the public embed)<br>
+            1/5 Resolving Spotify track...<br>
+            2/5 Downloading Artist - Song...<br>
+            3/5 Analyzing audio...<br>
+            4/5 Writing and validating all four difficulties...<br>
+            5/5 Publishing validated song package...<br>
+            Ready: ~/Desktop/Clone Hero/Artist - Song (SongHero &lt;track-id&gt;)/
           </div>
         </div>
       </div>
@@ -567,47 +567,47 @@
       </div>
       <div class="section-label">Features</div>
       <h2 class="section-title">What it does</h2>
-      <p class="section-desc">No MIDI knowledge required. Paste a Spotify link and get a playable chart.</p>
+      <p class="section-desc">Automatically generated practice charts, not hand-authored guitar transcriptions.</p>
       <div class="feature-grid">
         <div class="feature-card">
           <div class="feature-icon">🎧</div>
           <h3>Spotify → Chart</h3>
-          <p>Paste a Spotify track or playlist URL. Metadata is pulled from the public page — no API keys, no accounts, no setup.</p>
+          <p>Paste a Spotify track or public playlist URL. Metadata comes from public pages. Local analysis needs no API key.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📋</div>
           <h3>Playlist Mode</h3>
-          <p>Paste a playlist URL and it'll process every track in sequence. Queue up 50 songs and come back to 50 charts.</p>
+          <p>Process tracks exposed by a public playlist embed, one at a time. Results report successes, skips, and failures.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🤖</div>
-          <h3>Gemini AI Engine</h3>
-          <p>Uses Gemini 2.0 Flash to identify song sections and build note patterns per difficulty. Also turns plain lyrics into synced karaoke tracks.</p>
+          <h3>Optional Gemini Enhancement</h3>
+          <p>Enable Gemini for guitar-style suggestions based on measured audio features. Off by default. Requires your own key and may incur API charges.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🎤</div>
           <h3>Synced Lyrics</h3>
-          <p>Fetches time-synced LRC lyrics from LRCLIB. Gemini fills in gaps and aligns everything to the song's actual sections.</p>
+          <p>Fetches available synced lyrics from LRCLIB. Plain lyrics use estimated timing. Lyrics with a conflicting reference duration are omitted.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🎚️</div>
           <h3>4 Difficulty Levels</h3>
-          <p>Easy through Expert, each with its own note grid. Orange fret and chords introduced progressively as difficulty increases.</p>
+          <p>Easy through Expert share one timing grid. Easy and Medium use single notes without orange frets. Hard and Expert add density and chords.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📺</div>
           <h3>Music Video Background</h3>
-          <p>Downloads the official music video from YouTube and bundles it as a background. Works automatically, disable it if you don't want it.</p>
+          <p>Use --video to require a compatible background from the selected YouTube recording, or --auto-video to try one. Video is off by default.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🥁</div>
           <h3>Beat Detection</h3>
-          <p>librosa extracts onsets, tempo, and pitch from the audio. Notes land on detected beats — nothing's placed at random.</p>
+          <p>librosa extracts onsets, tempo, and pitch. Measured beats and subdivisions guide deterministic note patterns.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📦</div>
           <h3>Ready to Play</h3>
-          <p>Outputs a Clone Hero song folder with notes.chart, song.ini, lyrics, album art, and audio. Drop it in your Songs folder and play.</p>
+          <p>Packages notes.chart, song.ini, verified audio, and available optional assets. Validates the package before publishing it to your Songs directory.</p>
         </div>
       </div>
     </div>
@@ -626,22 +626,22 @@
         <div class="step">
           <span class="step-num">01</span>
           <h3>Resolve</h3>
-          <p>Reads song title, artist, album, year, and duration from the public Spotify page. For playlists, it grabs every track at once. No auth needed.</p>
+          <p>Reads available song metadata from public Spotify pages. Playlist processing uses tracks exposed by the public embed. No Spotify login needed.</p>
         </div>
         <div class="step">
           <span class="step-num">02</span>
           <h3>Download</h3>
-          <p>Grabs the audio and optional music video from YouTube. Fetches synced lyrics from LRCLIB at the same time.</p>
+          <p>Downloads audio from a matching YouTube recording. Video and lyrics are optional. Browser cookies require an explicit flag.</p>
         </div>
         <div class="step">
           <span class="step-num">03</span>
           <h3>Analyze</h3>
-          <p>librosa detects beats, onsets, and pitch. Gemini maps out song sections, syncs lyrics, and designs note patterns for each difficulty.</p>
+          <p>Local analysis detects beats, onsets, pitch, and sections. Optional Gemini suggestions shape guitar-style patterns. Gemini never generates lyric text.</p>
         </div>
         <div class="step">
           <span class="step-num">04</span>
           <h3>Generate</h3>
-          <p>Writes a .chart file with all 4 difficulties plus lyric tracks, builds the metadata, and packages it into a Clone Hero folder.</p>
+          <p>Writes four difficulties and available lyric events. Validates media and chart timing, then publishes a complete song folder.</p>
         </div>
       </div>
     </div>
@@ -667,31 +667,31 @@
           <tbody>
             <tr>
               <td class="diff-name">🥉 EASY</td>
-              <td>25%</td>
-              <td><span class="cross">—</span></td>
-              <td><span class="cross">—</span></td>
+              <td>Lowest</td>
+              <td><span class="cross">-</span></td>
+              <td><span class="cross">-</span></td>
               <td>Simple single notes on strong beats</td>
             </tr>
             <tr>
               <td class="diff-name">🥈 MEDIUM</td>
-              <td>50%</td>
-              <td><span class="cross">—</span></td>
-              <td><span class="cross">—</span></td>
+              <td>Low</td>
+              <td><span class="cross">-</span></td>
+              <td><span class="cross">-</span></td>
               <td>Faster single notes, varied patterns</td>
             </tr>
             <tr>
               <td class="diff-name">🥇 HARD</td>
-              <td>70%</td>
+              <td>Higher</td>
               <td><span class="check">✓</span></td>
               <td><span class="check">✓</span></td>
               <td>Orange notes, some chords, faster sections</td>
             </tr>
             <tr>
               <td class="diff-name">🎸 EXPERT</td>
-              <td>90%</td>
+              <td>Highest</td>
               <td><span class="check">✓</span></td>
               <td><span class="check">✓</span></td>
-              <td>Dense patterns, full chords, all notes mapped</td>
+              <td>Dense patterns with chords and all five frets</td>
             </tr>
           </tbody>
         </table>
@@ -720,27 +720,27 @@
             </tr>
             <tr>
               <td class="diff-name"><code style="font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--gold)">songhero &lt;playlist-url&gt;</code></td>
-              <td>Batch-chart an entire Spotify playlist</td>
+              <td>Chart tracks exposed by a public Spotify playlist embed</td>
             </tr>
             <tr>
               <td class="diff-name"><code style="font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--gold)">songhero -</code></td>
-              <td>Interactive mode — set options, manage keys, queue tracks</td>
+              <td>Interactive mode: set options, manage keys, queue tracks</td>
             </tr>
             <tr>
               <td class="diff-name"><span class="flag">--lyrics</span> / <span class="flag">--no-lyrics</span></td>
-              <td>Enable or disable synced lyric fetching from LRCLIB</td>
+              <td>Fetch available lyrics, enabled by default; plain-text timing is estimated</td>
             </tr>
             <tr>
               <td class="diff-name"><span class="flag">--gemini</span> / <span class="flag">--no-gemini</span></td>
-              <td>Enable or disable Gemini AI enhancement of charts and lyrics</td>
+              <td>Optional guitar-style enhancement, off by default; API use may incur charges</td>
             </tr>
             <tr>
               <td class="diff-name"><span class="flag">--video</span> / <span class="flag">--no-video</span></td>
-              <td>Enable or disable music video background download</td>
+              <td>Require a compatible background video, or leave video off (default)</td>
             </tr>
             <tr>
               <td class="diff-name"><span class="flag">--rewrite</span></td>
-              <td>Overwrite an existing chart folder instead of skipping it</td>
+              <td>Regenerate this track's SongHero-owned package after the replacement validates</td>
             </tr>
             <tr>
               <td class="diff-name"><span class="flag">--output &lt;dir&gt;</span></td>
@@ -771,15 +771,20 @@
         </div>
         <div class="install-terminal" id="tab-curl">
           <button class="copy-btn" onclick="copyInstall('curl')">COPY</button>
-          <span class="dollar">$</span> <span style="color:#b8933a">curl</span> <span style="color:#4a4239">-sSL</span> <span style="color:#2563eb">https://raw.githubusercontent.com/jackwallner/portfolio/main/docs/songhero/install.sh</span> <span style="color:#4a4239">|</span> <span style="color:#b8933a">bash</span>
+          <span class="dollar">$</span> <span style="color:#b8933a">curl</span> <span style="color:#4a4239">-fsSL</span> <span style="color:#2563eb">https://raw.githubusercontent.com/jackwallner/any-song-clone-hero-cli/main/landing/install.sh</span> <span style="color:#4a4239">|</span> <span style="color:#b8933a">bash -s -- --add-to-path</span>
         </div>
         <div class="install-terminal" id="tab-git" style="display:none">
           <button class="copy-btn" onclick="copyInstall('git')">COPY</button>
           <span class="dollar">$</span> <span style="color:#b8933a">git</span> <span style="color:#4a4239">clone</span> <span style="color:#2563eb">https://github.com/jackwallner/any-song-clone-hero-cli.git</span><br>
-          <span class="dollar">$</span> <span style="color:#b8933a">cd</span> <span style="color:#4a4239">any-song-clone-hero-cli &&</span> <span style="color:#b8933a">chmod</span> <span style="color:#4a4239">+x index.js</span>
+          <span class="dollar">$</span> cd any-song-clone-hero-cli<br>
+          <span class="dollar">$</span> npm ci<br>
+          <span class="dollar">$</span> python3 -m venv .venv<br>
+          <span class="dollar">$</span> .venv/bin/python -m pip install -r requirements.txt<br>
+          <span class="dollar">$</span> node index.js -- doctor<br>
+          <span class="dollar">$</span> node index.js --help
         </div>
         <div class="prereq-note">
-          Prerequisites: <code>brew install yt-dlp ffmpeg</code> · <code>pip3 install librosa soundfile numpy scipy google-generativeai</code>
+          Installer: requires Homebrew on macOS, installs dependencies, and verifies the CLI. --add-to-path backs up and updates your shell configuration. Source install: Node 18+, Python 3.9+, yt-dlp, ffmpeg, and ffprobe.
         </div>
       </div>
     </div>
@@ -793,16 +798,17 @@
       </div>
       <div class="section-label">Output</div>
       <h2 class="section-title">What you get</h2>
-      <p class="section-desc">Each song lands in its own Clone Hero folder. Drop it in your Songs directory and rescan.</p>
+      <p class="section-desc">Each song lands in a folder identified by its Spotify track ID. Select your Songs directory with --output, then rescan.</p>
       <div class="output-tree">
         <span class="dir">~/Desktop/Clone Hero/</span><br>
-        <span class="dir">└── Foo Fighters - New Way Home (SongHero AI)/</span><br>
+        <span class="dir">└── Artist - Song (SongHero &lt;track-id&gt;)/</span><br>
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── notes.chart</span> &nbsp;<span class="comment">All 4 difficulties + lyric tracks</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── .songhero.json</span> &nbsp;<span class="comment">Ownership and file hashes</span><br>
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── song.ini</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">Metadata (artist, album, length)</span><br>
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── song.opus</span> &nbsp;&nbsp;&nbsp;<span class="comment">High-quality audio</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── album.jpg</span> &nbsp;&nbsp;&nbsp;<span class="comment">Album cover art</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── lyrics.json</span> &nbsp;<span class="comment">Synced karaoke lyrics</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">└── video.mp4</span> &nbsp;&nbsp;&nbsp;<span class="comment">Music video background</span>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── album.jpg</span> &nbsp;&nbsp;&nbsp;<span class="comment">Optional download thumbnail</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── lyrics.json</span> &nbsp;<span class="comment">Optional source lyrics</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">└── video.mp4</span> &nbsp;&nbsp;&nbsp;<span class="comment">Optional verified H.264 video</span>
       </div>
     </div>
   </section>
@@ -811,7 +817,7 @@
   <section class="cta-section">
     <div class="container">
       <h2>Try it out</h2>
-      <p>Paste a link, get a chart. Lyrics, video, four difficulties — done.</p>
+      <p>Build a practice chart with four difficulties. Add lyrics and video when available.</p>
       <div class="hero-actions">
         <a href="#install" class="btn btn-primary">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -826,6 +832,7 @@
   <footer>
     <div class="container">
       <p>Built by <a href="https://jackwallner.com">Jack Wallner</a> · <a href="https://github.com/jackwallner/any-song-clone-hero-cli">GitHub</a> · MIT License</p>
+      <p>Use only audio, video, and lyrics you have permission to download and use.</p>
     </div>
   </footer>
 
@@ -839,8 +846,8 @@
 
     function copyInstall(tab) {
       const lines = {
-        curl: 'curl -sSL https://raw.githubusercontent.com/jackwallner/portfolio/main/docs/songhero/install.sh | bash',
-        git: 'git clone https://github.com/jackwallner/any-song-clone-hero-cli.git && cd any-song-clone-hero-cli && chmod +x index.js'
+        curl: 'curl -fsSL https://raw.githubusercontent.com/jackwallner/any-song-clone-hero-cli/main/landing/install.sh | bash -s -- --add-to-path',
+        git: 'git clone https://github.com/jackwallner/any-song-clone-hero-cli.git\ncd any-song-clone-hero-cli\nnpm ci\npython3 -m venv .venv\n.venv/bin/python -m pip install -r requirements.txt\nnode index.js -- doctor\nnode index.js --help'
       };
       navigator.clipboard.writeText(lines[tab]).then(() => {
         const btn = document.querySelector(`#tab-${tab} .copy-btn`);
