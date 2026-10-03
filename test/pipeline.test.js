@@ -97,6 +97,24 @@ test('failures and cancellation clean temporary work and locks, keep-temp is hon
   assert.equal(fs.readdirSync(cancelled.base).some(file => file.startsWith('songhero-')), false);
 });
 
+test('structured analyzer errors survive progress output on stderr', async t => {
+  const message = 'Audio is silent; no playable chart can be generated';
+  const { pipeline, options, logs } = setup(t, {
+    analyzeAudio: undefined,
+    probeMedia: async () => ({ format: { format_name: 'ogg' }, streams: [{ codec_name: 'opus', codec_type: 'audio' }] }),
+    runProcess: async () => {
+      const error = new Error('analyze.py failed (1): Loading and analyzing audio...');
+      error.stdout = JSON.stringify({ error: message });
+      error.stderr = 'Loading and analyzing audio...';
+      throw error;
+    },
+  });
+  const result = await pipeline.runPipeline(URL, options);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.error, message);
+  assert.ok(logs.includes(`Failed: ${message}`));
+});
+
 test('mixed playlists aggregate failures and duplicate skips, empty playlists fail', async t => {
   const { pipeline, options } = setup(t, { resolvePlaylist: async () => ({ playlist_name: 'Fixture', tracks: [
     { spotify_url: URL }, { spotify_url: 'invalid' }, { spotify_url: URL },
